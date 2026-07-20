@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "author": "Smart Warehouse — ESP32 Wokwi Simulation",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi/esp32-devkit-v1",
+      "id": "esp32",
+      "top": 0,
+      "left": 200,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi/hc-sr04",
+      "id": "ultrasonic",
+      "top": -120,
+      "left": -60,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi/servo",
+      "id": "servo",
+      "top": 120,
+      "left": -80,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi/buzzer",
+      "id": "buzzer",
+      "top": 130,
+      "left": 320,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    ["esp32:GND.1", "ultrasonic:GND", "black", [236, -40, 236, -80]],
+    ["esp32:VIN.5", "ultrasonic:VCC", "red", [248, -40, 248, -80]],
+
+    ["esp32:12", "ultrasonic:TRIG", "orange", [300, -40, 140, -40, 140, -70]],
+    ["esp32:13", "ultrasonic:ECHO", "yellow", [318, -40, 160, -40, 160, -80]],
+
+    ["esp32:GND.2", "servo:GND", "black", [270, 40, 270, 80, 100, 80]],
+    ["esp32:VIN.5", "servo:V+", "red", [248, 40, 248, 80, 80, 80]],
+
+    ["esp32:18", "servo:PWM", "blue", [336, 40, 336, 100, 60, 100]],
+
+    ["esp32:GND.2", "buzzer:GND", "black", [270, 40, 270, 80, 370, 80]],
+    ["esp32:19", "buzzer:IN", "purple", [354, 40, 354, 80, 390, 80]]
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "warehouse-monitoring",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Smart Warehouse IoT Monitoring — Monorepo",
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:ai": "cd ai-module && python main.py",
+    "install:all": "cd backend && npm install && cd ../frontend && npm install && cd ../ai-module && pip install -r requirements.txt"
+  }
+}
