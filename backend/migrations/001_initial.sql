@@ -1,8 +1,9 @@
 -- PostgreSQL schema for Warehouse Monitoring System
 -- Run this once against your warehouse_db database.
 
--- Enable UUID generation
+-- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";      -- for bcrypt hashing in seed data
 
 -- Users table (authentication)
 CREATE TABLE IF NOT EXISTS users (
@@ -27,3 +28,11 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 -- Index for efficient querying
 CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_event_type  ON activity_logs (event_type);
+
+-- ── Default admin account (seed data) ──
+-- Password: admin123  (bcrypt-hashed via pgcrypto)
+INSERT INTO users (username, email, password_hash, role)
+VALUES ('admin', 'admin@warehouse.local',
+        crypt('admin123', gen_salt('bf', 12)),
+        'admin')
+ON CONFLICT (username) DO NOTHING;
