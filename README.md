@@ -1,132 +1,62 @@
-# IoT &amp; AI-Integrated Smart Warehouse Monitoring and Sorting System
+# IoT & AI-Integrated Smart Warehouse Monitoring System
 
-**Monorepo** | `warehouse-monitoring`
-
-A full-stack, real-time warehouse automation simulation platform combining embedded IoT hardware (ESP32 via Wokwi), a Node.js/Express backend, a React dashboard, and a Python AI micro-service. Designed for academic demonstration of Industry 4.0 concepts — sensor telemetry, actuator control, time-series storage, predictive analytics, and secure authentication.
+**Real-time sensor telemetry, actuator control, JWT authentication, PostgreSQL persistence, and Firebase backup — all containerised with Docker Compose.**
 
 ---
 
-## Table of Contents
+## Project Overview
 
-1. [Project Overview &amp; Features](#project-overview--features)
-2. [Hardware Pin Mapping (Wokwi)](#hardware-pin-mapping-wokwi)
-3. [Technology Stack](#technology-stack)
-4. [Directory Tree](#directory-tree)
-5. [Environment Variables Configuration](#environment-variables-configuration)
-6. [Data Flow &amp; Architecture](#data-flow--architecture)
-7. [Getting Started](#getting-started)
-8. [API Reference](#api-reference)
-9. [MQTT Topic Specification](#mqtt-topic-specification)
+This is a full-stack **Industry 4.0** simulation platform that replicates a smart warehouse environment. An ESP32 microcontroller (simulated via **Wokwi for VS Code**) streams ultrasonic distance readings and colour-detection events over MQTT. A Node.js backend ingests the data, persists it to **PostgreSQL** and **Firebase Realtime Database**, and pushes it live to a React dashboard via **Socket.io**. Users authenticate with **JWT + bcrypt**, and an optional **Python/FastAPI AI module** provides peak-hour forecasting and anomaly detection.
 
----
+### Tech Stack
 
-## Project Overview &amp; Features
-
-### Hardware / Firmware Layer (ESP32 + Wokwi)
-
-| Feature | Description |
+| Layer | Technology |
 |---|---|
-| **Ultrasonic Ranging** | HC-SR04 sensor reads obstacle distance (cm) every 2 seconds and streams values via MQTT. |
-| **Colour Sorting Simulation** | Firmware randomly assigns a colour label (`RED`, `BLUE`, `GREEN`, `NONE`) to each reading, enabling visual demonstration of conveyor-belt colour detection in the dashboard. |
-| **Servo Gate &amp; Buzzer** | SG90 servo acts as a warehouse gate (open/close). An active buzzer provides audible emergency alerts. Both are remotely controllable from the web UI. |
+| **Frontend** | React 18, Vite 7, TailwindCSS 3, Recharts 2, Socket.io-client |
+| **Serving (prod)** | Nginx Alpine (reverse proxy + static files) |
+| **Backend** | Node.js 20, Express 4, Socket.io 4, MQTT.js 5 |
+| **Database** | PostgreSQL 15 Alpine (auth, audit logs) |
+| **Realtime DB** | Firebase Realtime Database (sensor time-series) |
+| **Auth** | bcrypt + JSON Web Token (JWT) |
+| **AI Module** | Python 3.10+, FastAPI, Scikit-Learn, Uvicorn |
+| **IoT Simulator** | Wokwi for VS Code — ESP32 DevKit + HC-SR04 + Servo + Buzzer |
+| **Messaging** | MQTT (HiveMQ public broker) |
+| **DevOps** | Docker, Docker Compose, multi-stage builds |
 
-### Software / Application Layer
+### Core Features
 
-| Feature | Description |
-|---|---|
-| **Real-Time Telemetry** | Sensor data flows from ESP32 → MQTT → Backend → **Firebase Realtime Database** (time-series) and is pushed to the frontend via **Socket.io**. |
-| **Interactive Dashboard** | React + TailwindCSS dashboard with live sensor cards (Distance, Colour, Temperature, Humidity), **Recharts** line/bar charts, and one-click actuator controls (Emergency Stop, Gate Toggle). |
-| **Authentication &amp; Authorisation** | User registration and login secured with **bcrypt** password hashing and **JWT** tokens. Credentials stored in **PostgreSQL**. |
-| **Predictive AI Module** | Python **FastAPI** service runs a **Scikit-Learn Linear Regression** model for peak-hour activity forecasting and an **Isolation Forest** anomaly detector for predictive maintenance alerts. |
-| **Audit Logging** | All actuator actions (gate open/close, emergency stops) are recorded in the PostgreSQL `activity_logs` table for traceability. |
-
----
-
-## Hardware Pin Mapping (Wokwi)
-
-The simulation uses an **ESP32 DevKit v1 (wokwi/esp32-devkit-v1)** as the microcontroller.
-
-| Peripheral | Signal | ESP32 GPIO | Wire Colour (Diagram) |
-|---|---|---|---|
-| HC-SR04 Ultrasonic | `TRIG` | **GPIO 12** | Orange |
-| HC-SR04 Ultrasonic | `ECHO` | **GPIO 13** | Yellow |
-| HC-SR04 Ultrasonic | `VCC` | VIN (5V) | Red |
-| HC-SR04 Ultrasonic | `GND` | GND | Black |
-| SG90 Servo Motor | `PWM` (signal) | **GPIO 18** | Blue |
-| SG90 Servo Motor | `V+` | VIN (5V) | Red |
-| SG90 Servo Motor | `GND` | GND | Black |
-| Active Buzzer | `IN` | **GPIO 19** | Purple |
-| Active Buzzer | `GND` | GND | Black |
-
-> **Important:** The Wokwi IoT Gateway must be enabled in VS Code (`F1` → `Wokwi: Start IoT Gateway`) for the simulated ESP32 to reach the external MQTT broker (`broker.hivemq.com`).
+- **Live Telemetry Dashboard** — distance, detected colour, temperature, humidity cards updated in real time
+- **Time-Series Charts** — Recharts line/bar charts showing distance over time, colour distribution, and temperature/humidity trends
+- **Remote Actuator Control** — one-click Emergency Stop and Gate Open/Close from the dashboard, forwarded to ESP32 via MQTT
+- **JWT Authentication** — register and login with bcrypt-hashed credentials stored in PostgreSQL
+- **Route Guarding** — unauthenticated users are redirected to the login page
+- **Firebase Backup** — every sensor reading is persisted to Firebase Realtime Database (gracefully skips if unconfigured)
+- **Audit Trail** — actuator commands logged in `activity_logs` table
+- **AI Analytics** — REST endpoints for peak-hour activity prediction and anomaly detection
 
 ---
 
-## Technology Stack
+## Prerequisites
 
-| Layer | Technologies |
-|---|---|
-| **Simulation** | Wokwi for VS Code, ESP32 (Arduino core) |
-| **Firmware** | C++ (Arduino), `WiFi.h`, `PubSubClient.h`, `Servo.h` |
-| **Backend** | Node.js, Express.js, Socket.io, `mqtt` (MQTT.js), `pg` (node-postgres), `firebase-admin` |
-| **Frontend** | React 18 (Vite), TailwindCSS, Recharts, Socket.io-client, React Router |
-| **AI Module** | Python 3.10+, FastAPI, Scikit-Learn, NumPy, Uvicorn |
-| **Databases** | PostgreSQL (auth, logs, relational) + Firebase Realtime Database (sensor time-series) |
-| **Messaging** | MQTT (HiveMQ public broker) + WebSocket (Socket.io) |
+Install the following on your local machine:
 
----
+| Tool | Minimum Version | Purpose |
+|---|---|---|
+| **Docker Desktop** | 4.x + | Container runtime |
+| **Node.js** | v20+ | Local development (optional — Docker builds use Node 20 Alpine) |
+| **Git** | 2.x + | Clone the repository |
+| **VS Code** | Latest | Optional — for Wokwi simulation |
+| **Wokwi for VS Code** | Latest | Optional — ESP32 hardware simulation |
 
-## Directory Tree
-
-```
-warehouse-monitoring/
-├── .env                          # Environment variables (all services)
-├── .env.example                  # Template for .env
-├── .gitignore
-├── package.json                  # Root monorepo scripts
-│
-├── backend/
-│   ├── server.js                 # Express + Socket.io + MQTT entry point
-│   ├── package.json
-│   ├── config/
-│   │   ├── database.js           # PostgreSQL connection pool
-│   │   └── firebase.js           # Firebase Admin SDK initialisation
-│   ├── controllers/
-│   │   └── authController.js     # Register / Login / Verify (bcrypt + JWT)
-│   ├── middleware/
-│   │   └── authMiddleware.js     # Bearer token verification
-│   └── migrations/
-│       └── 001_initial.sql       # users + activity_logs DDL
-│
-├── frontend/
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.js            # Vite proxy → backend :4000
-│   ├── tailwind.config.js
-│   ├── postcss.config.js
-│   ├── public/
-│   └── src/
-│       ├── main.jsx              # React DOM root + BrowserRouter
-│       ├── App.jsx               # Route definitions
-│       ├── index.css             # Tailwind directives + global styles
-│       └── pages/
-│           └── Dashboard.jsx     # Real-time dashboard + Recharts charts
-│
-├── ai-module/
-│   ├── main.py                   # FastAPI app (peak-hour + anomaly detection)
-│   └── requirements.txt          # Python dependencies
-│
-└── firmware/
-    ├── diagram.json              # Wokwi wiring layout
-    ├── wokwi.toml                # Wokwi project configuration
-    └── firmware.ino              # ESP32 Arduino sketch
-```
+> **Note:** An internet-accessible MQTT broker is required. The project defaults to the free public broker at `broker.hivemq.com:1883`. Replace with your own broker in `.env` if needed.
 
 ---
 
-## Environment Variables Configuration
+## Credentials & Environment Setup
 
-Create a `.env` file in the project root based on the template below:
+### Step 1 — Create the `.env` File
+
+Copy the template below into a file named `.env` in the **project root**:
 
 ```env
 # ── PostgreSQL (Auth & Logs) ──
@@ -136,246 +66,210 @@ PG_DATABASE=warehouse_db
 PG_USER=warehouse_admin
 PG_PASSWORD=change_me_in_production
 
-# ── Firebase Admin SDK ──
-# 1. Go to Firebase Console → Project Settings → Service Accounts
-# 2. Click "Generate new private key" → save as backend/config/serviceAccountKey.json
-# 3. Set your Realtime Database URL below
+# ── Firebase Admin (Realtime Sensor DB) ──
 FIREBASE_SERVICE_ACCOUNT_PATH=./config/serviceAccountKey.json
 FIREBASE_DATABASE_URL=https://your-project.firebaseio.com
 
 # ── MQTT Broker ──
-# Default: HiveMQ public broker (no auth required)
 MQTT_BROKER_URL=mqtt://broker.hivemq.com
 MQTT_USERNAME=
 MQTT_PASSWORD=
 
-# ── JWT Secret ──
-# Replace with a strong random string in production
+# ── JWT Secret (replace with a strong random string!) ──
 JWT_SECRET=your_256bit_random_secret_key_here
 
 # ── Server ──
 PORT=4000
 CORS_ORIGIN=http://localhost:5173
 
-# ── AI Module ──
+# ── AI Module (optional) ──
 AI_SERVICE_URL=http://localhost:8000
 ```
 
-> **Firebase Setup Note:** The `serviceAccountKey.json` file is **never committed to Git**. It is listed in `.gitignore`. You must generate it from the Firebase Console and place it in `backend/config/` before starting the backend.
+> **Important:** `docker-compose.yml` overrides `PG_HOST` to `db` (the Docker service name) and `CORS_ORIGIN` to `*` automatically. You do **not** need to change those for Docker deployment.
 
----
+### Step 2 — Firebase Service Account (Optional but Recommended)
 
-## Data Flow &amp; Architecture
-
-### Telemetry Flow (Sensor → Dashboard)
-
-```
-┌──────────┐    MQTT      ┌──────────────┐   Firebase   ┌───────────────┐
-│  ESP32   │──────────────▶│   Backend    │─────────────▶│  Firebase RTDB │
-│ (Wokwi)  │ warehouse/    │  (server.js) │              │   (time-series)│
-│          │  sensors      │              │              └───────────────┘
-└──────────┘               │    Socket.io │
-                           │    emit()    │
-                           └──────┬───────┘
-                                  │  "sensor-data"
-                                  ▼
-                        ┌──────────────────┐
-                        │  React Dashboard │
-                        │  (Dashboard.jsx) │
-                        └──────────────────┘
-```
-
-1. ESP32 reads HC-SR04 distance, generates a random colour label.
-2. Firmware publishes `{"distance": 42.3, "color": "RED"}` to MQTT topic `warehouse/sensors`.
-3. Backend `server.js` receives the message via its MQTT subscriber.
-4. Backend **writes** the reading to Firebase Realtime Database under `sensors/esp32/{timestamp}`.
-5. Backend **emits** the payload to all connected frontend clients via Socket.io event `sensor-data`.
-6. Dashboard updates live sensor cards and appends data points to Recharts charts.
-
-### Command Flow (Dashboard → Actuator)
-
-```
-┌──────────────────┐   Socket.io    ┌──────────────┐     MQTT      ┌──────────┐
-│  React Dashboard │───────────────▶│   Backend    │──────────────▶│  ESP32   │
-│                  │  actuator-     │  (server.js) │ warehouse/    │ (Wokwi)  │
-│                  │  command       │              │  actuators    │          │
-└──────────────────┘                └──────────────┘               └─────┬────┘
-                                                                         │
-                                                                    ┌────▼─────┐
-                                                                    │  Servo   │
-                                                                    │  Buzzer  │
-                                                                    └──────────┘
-```
-
-1. User clicks a control button on the dashboard (Emergency Stop, Open/Close Gate).
-2. Dashboard emits a Socket.io event (`emergency-stop`, `gate-trigger`, or `actuator-command`).
-3. Backend receives the event and publishes a JSON command to MQTT topic `warehouse/actuators`.
-4. ESP32 firmware receives the command, parses it (supports both raw strings and JSON), and actuates the servo motor and/or buzzer accordingly.
-
-### REST API Fallback
-
-Actuator commands can also be sent via HTTP POST to `/api/actuators` (JWT-authenticated). This provides a fallback for non-WebSocket clients.
-
----
-
-## Getting Started
-
-### Prerequisites
-
-| Tool | Version | Purpose |
-|---|---|---|
-| **Node.js** | ≥ 18 LTS | Backend &amp; Frontend runtime |
-| **Python** | ≥ 3.10 | AI Module (FastAPI) |
-| **PostgreSQL** | ≥ 14 | Auth &amp; audit logs database |
-| **VS Code** | Latest | IDE with Wokwi extension |
-| **Wokwi for VS Code** | Latest | ESP32 hardware simulation |
-
----
-
-### Step 1 — Install Dependencies
-
-From the project root:
-
-```bash
-npm run install:all
-```
-
-This installs:
-- Backend packages (`express`, `socket.io`, `mqtt`, `pg`, `bcrypt`, `firebase-admin`, `jsonwebtoken`, …)
-- Frontend packages (`react`, `react-dom`, `recharts`, `socket.io-client`, `tailwindcss`, `vite`, …)
-- Python packages (`fastapi`, `uvicorn`, `scikit-learn`, `numpy`, `pydantic`)
-
----
-
-### Step 2 — Initialise PostgreSQL
-
-1. Create the database:
-
-```sql
-CREATE DATABASE warehouse_db;
-CREATE USER warehouse_admin WITH ENCRYPTED PASSWORD 'change_me_in_production';
-GRANT ALL PRIVILEGES ON DATABASE warehouse_db TO warehouse_admin;
-```
-
-2. Run the migration:
-
-```bash
-psql -U warehouse_admin -d warehouse_db -f backend/migrations/001_initial.sql
-```
-
-This creates the `users` and `activity_logs` tables.
-
----
-
-### Step 3 — Configure Firebase
+Sensor data persistence to Firebase will be **silently skipped** if no credentials are provided — the dashboard and MQTT relay still work perfectly. To enable Firebase:
 
 1. Go to the [Firebase Console](https://console.firebase.google.com/).
-2. Create a project (or use an existing one).
-3. Navigate to **Project Settings → Service Accounts**.
-4. Click **Generate new private key** and download the JSON file.
-5. Rename it to `serviceAccountKey.json` and place it in `backend/config/`.
-6. In your `.env`, set `FIREBASE_DATABASE_URL` to your Realtime Database URL (found under **Build → Realtime Database**).
+2. Open your project → **Project Settings** → **Service accounts**.
+3. Click **Generate new private key** and download the JSON file.
+4. Rename the downloaded file to **`serviceAccountKey.json`**.
+5. Place it inside **`backend/config/`**.
 
----
-
-### Step 4 — Launch Wokwi Simulation
-
-1. Open the project in **VS Code**.
-2. Open the `firmware/` folder in the workspace.
-3. Start the **Wokwi IoT Gateway**:
-
-   > Press `F1` → type `Wokwi: Start IoT Gateway` → press Enter.
-
-   The IoT Gateway bridges the simulated ESP32's virtual WiFi network to the public internet, allowing it to reach `broker.hivemq.com`.
-
-4. Start the hardware simulation:
-
-   > Press `F1` → type `Wokwi: Start Simulation` → press Enter.
-
-   The simulation will open in a new tab. The ESP32 will:
-   - Boot and connect to WiFi
-   - Connect to the MQTT broker
-   - Begin publishing sensor data every 2 seconds
-   - Listen for actuator commands
-
----
-
-### Step 5 — Start Application Services
-
-Open **three separate terminals** and run each command from the project root:
-
-**Terminal 1 — Backend API Server:**
-
-```bash
-npm run dev:backend
+```
+backend/config/serviceAccountKey.json    ← never committed to Git
 ```
 
-Starts on **http://localhost:4000**. You should see MQTT and PostgreSQL connection logs.
-
-**Terminal 2 — AI Prediction Module:**
-
-```bash
-npm run dev:ai
-```
-
-Starts on **http://localhost:8000**. Access the interactive API docs at http://localhost:8000/docs.
-
-**Terminal 3 — Frontend Dashboard:**
-
-```bash
-npm run dev:frontend
-```
-
-Starts on **http://localhost:5173**. Open this URL in your browser to view the dashboard.
+Docker Compose automatically mounts this file into the container at runtime via a volume binding (`./backend/config/serviceAccountKey.json:/app/config/serviceAccountKey.json:ro`). No rebuild is needed when updating the key — just restart the stack.
 
 ---
 
-### Step 6 — Verify the System
+## How to Start the Project
 
-1. Open **http://localhost:5173** — the dashboard should show a green "Live" badge.
-2. The sensor cards (Distance, Detected Color) should update every 2 seconds.
-3. The Recharts line/bar charts should accumulate real-time data points.
-4. Click **Open Gate** — the simulated servo in Wokwi should rotate to 90°.
-5. Click **Emergency Stop** — the servo resets to 0° and the buzzer sounds for 1 second.
-6. To test the AI module, open **http://localhost:8000/docs** and try:
-   - `GET /predict/peak-hour?hour=14`
-   - `POST /predict/maintenance-alert` with a sample reading body.
+### First-Time Build
 
----
+```bash
+docker compose up --build
+```
 
-## API Reference
+This command:
+1. Pulls `postgres:15-alpine` and `nginx:alpine` base images
+2. Builds the **backend** image (Node 20 Alpine + native addons)
+3. Builds the **frontend** image (multi-stage: Vite build → Nginx serve)
+4. Starts all three services in dependency order (`db` → `backend` → `frontend`)
+5. Runs PostgreSQL migrations automatically on first launch
 
-### Backend REST API (`http://localhost:4000`)
+Wait for the output:
 
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| `GET` | `/api/health` | — | Health check (uptime, status) |
-| `POST` | `/api/auth/register` | — | Register new user `{username, email, password}` |
-| `POST` | `/api/auth/login` | — | Login, returns JWT `{email, password}` |
-| `POST` | `/api/auth/verify` | Bearer | Verify token validity |
-| `POST` | `/api/actuators` | Bearer | Send actuator command `{command, ...}` |
+```
+✔ Container warehouse-db        Healthy
+✔ Container warehouse-backend   Started
+✔ Container warehouse-frontend  Started
+```
 
-### AI Module API (`http://localhost:8000`)
+### Subsequent Starts
 
-| Method | Endpoint | Description |
+```bash
+docker compose up -d
+```
+
+The `-d` flag runs containers in detached (background) mode.
+
+### Local Endpoints
+
+| Service | URL | Notes |
 |---|---|---|
-| `GET` | `/` | Service health check |
-| `GET` | `/predict/peak-hour?hour=14` | Predict activity level for a given hour (0–23) |
-| `POST` | `/predict/maintenance-alert` | Anomaly detection on batch of sensor readings |
+| **Frontend Dashboard** | http://localhost | Nginx serves the React SPA |
+| **Backend API** | http://localhost:4000 | Express + Socket.io |
+| **Health Check** | http://localhost:4000/api/health | Returns `{ "status":"ok", "uptime":… }` |
+| **PostgreSQL** | `localhost:5432` | Connect with your favourite DB client |
+
+### Quick Test After Startup
+
+```bash
+# Health check
+curl http://localhost:4000/api/health
+
+# Register a test user
+curl -X POST http://localhost:4000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","email":"admin@warehouse.local","password":"admin123"}'
+
+# Login
+curl -X POST http://localhost:4000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@warehouse.local","password":"admin123"}'
+```
+
+Then open **http://localhost** in your browser and sign in.
 
 ---
 
-## MQTT Topic Specification
+## Wokwi Simulator Connectivity
 
-| Topic | Direction | Payload Format |
+The project includes a complete Wokwi simulation in the `firmware/` directory. The ESP32 firmware:
+
+1. Connects to WiFi `Wokwi-GUEST`
+2. Connects to the MQTT broker (`broker.hivemq.com:1883`)
+3. Reads the HC-SR04 ultrasonic sensor every 2 seconds
+4. Generates a random colour label (`RED`, `BLUE`, `GREEN`, or `NONE`)
+5. Publishes JSON to **`warehouse/sensors`**
+6. Subscribes to **`warehouse/actuators`** for remote commands
+
+### MQTT Topics
+
+| Topic | Direction | Payload Example |
 |---|---|---|
 | `warehouse/sensors` | ESP32 → Backend | `{"distance":42.3,"color":"RED"}` |
-| `warehouse/actuators` | Backend → ESP32 | `{"command":"gate_open","timestamp":"..."}` or raw `"GATE_OPEN"` |
+| `warehouse/actuators` | Backend → ESP32 | `{"command":"gate_open","timestamp":"…"}` |
 
-**Supported actuator commands:**
+### Starting the Simulator
 
-| Command | Effect |
-|---|---|
-| `GATE_OPEN` / `gate_open` | Servo rotates to 90° |
-| `GATE_CLOSE` / `gate_close` | Servo rotates to 0° |
-| `EMERGENCY_STOP` / `emergency_stop` | Servo returns to 0°, buzzer sounds 1 s |
+1. Install the **Wokwi for VS Code** extension
+2. Open the `firmware/` folder in VS Code
+3. Press `F1` → **Wokwi: Start IoT Gateway** (this bridges the virtual ESP32 to the internet)
+4. Press `F1` → **Wokwi: Start Simulation**
+
+The ESP32 will boot, connect, and begin publishing data. You should see live updates appear on the dashboard at **http://localhost**.
+
+> **Note:** The Wokwi simulation is **independent** of Docker. It communicates with the backend solely through the MQTT broker — no direct network link is needed between Wokwi and your containers.
+
+### Testing Without Wokwi
+
+You can publish synthetic sensor data directly to the MQTT broker using any MQTT client (e.g., MQTTX, `mosquitto_pub`, or Node-RED):
+
+```bash
+mosquitto_pub -h broker.hivemq.com -t "warehouse/sensors" \
+  -m '{"distance":35.2,"color":"BLUE","temperature":24.5,"humidity":62}'
+```
+
+---
+
+## Verification & Development Commands
+
+### Inspect the Database
+
+```bash
+# List all tables
+docker compose exec db psql -U warehouse_admin -d warehouse_db -c "\dt"
+
+# View registered users
+docker compose exec db psql -U warehouse_admin -d warehouse_db -c "SELECT id, username, email, role, created_at FROM users;"
+
+# View recent activity logs
+docker compose exec db psql -U warehouse_admin -d warehouse_db -c "SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 10;"
+```
+
+### View Container Logs
+
+```bash
+# All services
+docker compose logs -f
+
+# Specific service
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+### Rebuild a Single Service After Code Changes
+
+```bash
+docker compose up -d --build backend
+docker compose up -d --build frontend
+```
+
+### Stop & Clean Up
+
+```bash
+# Stop all containers (keeps volumes)
+docker compose down
+
+# Stop all containers AND delete the PostgreSQL volume (fresh start)
+docker compose down -v
+```
+
+### Restart Everything Fresh
+
+```bash
+docker compose down -v
+docker compose up --build -d
+```
+
+### Local Frontend Development (without Docker)
+
+If you prefer running the frontend locally for hot-reload during UI development:
+
+```bash
+cd frontend
+npm install
+npm run dev
+# → http://localhost:5173 (Vite dev server proxies /api to localhost:4000)
+```
+
+Keep the Docker backend running alongside it:
+```bash
+docker compose up -d db backend
+```
+---

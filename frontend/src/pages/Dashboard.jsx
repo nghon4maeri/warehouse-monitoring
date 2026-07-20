@@ -1,18 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
   DoorOpen,
   DoorClosed,
   Gauge,
+  LogOut,
   Palette,
   Thermometer,
   Droplets,
-  Power,
   PowerOff,
   RefreshCw,
 } from 'lucide-react';
+import { clearToken } from '../components/ProtectedRoute';
 import {
   LineChart,
   Line,
@@ -38,6 +40,7 @@ const formatTime = (iso) => {
 
 /* ───── Dashboard Component ───── */
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
 
@@ -157,6 +160,11 @@ export default function Dashboard() {
     setGateOpen(!gateOpen);
   };
 
+  const handleLogout = () => {
+    clearToken();
+    navigate('/login', { replace: true });
+  };
+
   /* ───── Render ───── */
   return (
     <div className="min-h-screen bg-gray-950 p-4 md:p-6 space-y-6">
@@ -183,6 +191,16 @@ export default function Dashboard() {
               Updated: {formatTime(latest.timestamp)}
             </span>
           )}
+          <button
+            onClick={handleLogout}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg
+              bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white border border-gray-700
+              transition-colors"
+            title="Logout"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Logout
+          </button>
         </div>
       </header>
 

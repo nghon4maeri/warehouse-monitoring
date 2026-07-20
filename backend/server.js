@@ -72,16 +72,18 @@ mqttClient.on('message', (topic, messageBuffer) => {
 
   try {
     const payload = JSON.parse(messageBuffer.toString());
-    const timestamp = payload.timestamp || new Date().toISOString();
-    const sensorRef = firebaseDb.ref(`sensors/${payload.deviceId || 'esp32'}/${timestamp.replace(/[.#$/[\]]/g, '_')}`);
 
-    sensorRef.set({
-      distance_cm: payload.distance_cm ?? null,
-      color: payload.color ?? 'unknown',
-      temperature: payload.temperature ?? null,
-      humidity: payload.humidity ?? null,
-      timestamp,
-    });
+    if (firebaseDb) {
+      const timestamp = payload.timestamp || new Date().toISOString();
+      const sensorRef = firebaseDb.ref(`sensors/${payload.deviceId || 'esp32'}/${timestamp.replace(/[.#$/[\]]/g, '_')}`);
+      sensorRef.set({
+        distance_cm: payload.distance_cm ?? null,
+        color: payload.color ?? 'unknown',
+        temperature: payload.temperature ?? null,
+        humidity: payload.humidity ?? null,
+        timestamp,
+      });
+    }
 
     // Broadcast to all connected frontend clients
     io.emit('sensor-data', payload);
@@ -113,6 +115,10 @@ io.on('connection', (socket) => {
 
   // Historical sensor log request (last 50 records from Firebase)
   socket.on('request-history', async (limit = 50) => {
+    if (!firebaseDb) {
+      socket.emit('history-data', {});
+      return;
+    }
     try {
       const snapshot = await firebaseDb.ref('sensors').limitToLast(limit).once('value');
       const data = snapshot.val() || {};

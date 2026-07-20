@@ -6,4 +6,4 @@ __pycache__/
 *.pyc
 venv/
 .venv/
-serviceAccountKey.json
+backend/config/serviceAccountKey.json

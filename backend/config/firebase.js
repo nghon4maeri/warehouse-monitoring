@@ -9,6 +9,8 @@ const admin = require('firebase-admin');
 const serviceAccountPath =
   process.env.FIREBASE_SERVICE_ACCOUNT_PATH || './config/serviceAccountKey.json';
 
+let db = null;
+
 try {
   const serviceAccount = require(serviceAccountPath);
 
@@ -19,15 +21,14 @@ try {
       'https://your-project.firebaseio.com',
   });
 
+  db = admin.database();
   console.log('[Firebase] Admin SDK initialised');
 } catch (err) {
   console.error(
-    '[Firebase] Failed to initialise Admin SDK. ' +
+    '[Firebase] Failed to initialise Admin SDK — sensor persistence disabled. ' +
       'Make sure serviceAccountKey.json exists in backend/config/',
     err.message,
   );
 }
-
-const db = admin.database();
 
 module.exports = { admin, db };
