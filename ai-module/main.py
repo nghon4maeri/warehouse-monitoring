@@ -1,23 +1,24 @@
 """
-Smart Warehouse — AI Prediction Module
-=========================================
+Smart Warehouse — AI Prediction Module v2
+==========================================
 FastAPI micro-service providing:
-  - /predict/peak-hour         – forecast peak warehouse activity
-  - /predict/maintenance-alert – anomaly detection via Isolation Forest
+  - POST /predict  — classify cargo & detect anomalies
+
+Uses:
+  - DecisionTreeClassifier (Light / Medium / Heavy)
+  - IsolationForest + rule-based checks (jams, overload, bad readings)
 """
 
 import os
-import json
 import logging
-from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
@@ -25,9 +26,9 @@ from sklearn.preprocessing import StandardScaler
 #  App Initialisation
 # ──────────────────────────────────────────────
 app = FastAPI(
-    title="Warehouse AI Module",
-    version="1.0.0",
-    description="Predictive analytics for IoT warehouse monitoring",
+    title="Warehouse AI Module v2",
+    version="2.0.0",
+    description="ML cargo classification & anomaly detection for IoT warehouse",
 )
 
 app.add_middleware(
@@ -41,58 +42,71 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-module")
 
 # ──────────────────────────────────────────────
-#  Models (lazy-loaded in production — pre-fit
-#  with historical data stored elsewhere)
+#  Pydantic Schemas
 # ──────────────────────────────────────────────
-
-# --- Dummy historical data for demo purposes ---
-# In production you'd load this from PostgreSQL / BigQuery.
-def _generate_demo_data(num_samples: int = 200):
-    """Generate synthetic warehouse sensor readings for demo."""
-    rng = np.random.default_rng(seed=42)
-    hours = np.arange(num_samples) % 24  # hour of day
-    # Activity peaks around 10:00 and 15:00
-    base = 20 + 15 * np.sin(np.pi * (hours - 6) / 12) + 25 * np.sin(np.pi * (hours - 14) / 8)
-    activity = base + rng.normal(0, 3, num_samples)
-    return hours.reshape(-1, 1), activity
+class SensorPayload(BaseModel):
+    weight_g: float
+    distance_cm: float
+    dwell_time_sec: float
 
 
-X_demo, y_demo = _generate_demo_data()
+class PredictResponse(BaseModel):
+    category: str
+    is_anomaly: bool
+    anomaly_reason: str
+    recommended_action: str
 
-# --- Linear Regression: predict activity level for a given hour ---
-_scaler = StandardScaler()
-X_scaled = _scaler.fit_transform(X_demo)
-_peak_model = LinearRegression().fit(X_scaled, y_demo)
 
-# --- Isolation Forest: flag anomalous sensor readings ---
+# ──────────────────────────────────────────────
+#  Training Data for DecisionTreeClassifier
+# ──────────────────────────────────────────────
+# Features: [weight_g, dwell_time_sec]
+# Labels:   0=Light, 1=Medium, 2=Heavy
+
+def _build_training_data():
+    X, y = [], []
+
+    # Light:   0–250g
+    for _ in range(40):
+        w = np.random.uniform(0, 249)
+        d = np.random.uniform(0.5, 3.0)
+        X.append([w, d])
+        y.append(0)
+
+    # Medium:  250–750g
+    for _ in range(40):
+        w = np.random.uniform(250, 749)
+        d = np.random.uniform(1.0, 5.0)
+        X.append([w, d])
+        y.append(1)
+
+    # Heavy:   750–1200g
+    for _ in range(40):
+        w = np.random.uniform(750, 1200)
+        d = np.random.uniform(2.0, 7.0)
+        X.append([w, d])
+        y.append(2)
+
+    return np.array(X), np.array(y)
+
+
+X_train, y_train = _build_training_data()
+
+# ── Decision Tree Classifier ──
+_clf = DecisionTreeClassifier(max_depth=4, random_state=42)
+_clf.fit(X_train, y_train)
+
+# ── Isolation Forest for anomaly detection ──
 _anomaly_model = IsolationForest(
     n_estimators=100,
     contamination=0.05,
     random_state=42,
-).fit(np.column_stack([X_demo.ravel(), y_demo]))
+).fit(X_train)
 
+# ── Scaler for isolation forest input ──
+_scaler = StandardScaler().fit(X_train)
 
-# ──────────────────────────────────────────────
-#  Pydantic Schemas
-# ──────────────────────────────────────────────
-class PeakHourResponse(BaseModel):
-    hour: int
-    predicted_activity: float
-    unit: str = "units"
-    confidence: str = "demo model — replace with production pipeline"
-
-
-class AnomalyResponse(BaseModel):
-    is_anomaly: bool
-    anomaly_score: float
-    recommendation: str
-
-
-class SensorReading(BaseModel):
-    distance_cm: float
-    color: str = "unknown"
-    temperature: Optional[float] = None
-    humidity: Optional[float] = None
+CATEGORY_MAP = {0: "Light", 1: "Medium", 2: "Heavy"}
 
 
 # ──────────────────────────────────────────────
@@ -101,60 +115,90 @@ class SensorReading(BaseModel):
 
 @app.get("/")
 def root():
-    return {"service": "warehouse-ai", "status": "ok"}
+    return {"service": "warehouse-ai", "status": "ok", "version": "2.0.0"}
 
 
-@app.get("/predict/peak-hour", response_model=PeakHourResponse)
-def predict_peak_hour(hour: int = Query(..., ge=0, le=23, description="Hour of day (0-23)")):
+@app.post("/predict", response_model=PredictResponse)
+def predict(payload: SensorPayload):
     """
-    Predict expected warehouse activity level for a given hour.
-    Uses a trained linear-regression model (demo).
+    Classify cargo and detect anomalies.
+
+    Input:
+      - weight_g: measured weight of the cargo
+      - distance_cm: ultrasonic distance reading
+      - dwell_time_sec: time the object has been in the station zone
+
+    Returns:
+      - category: "Light", "Medium", or "Heavy"
+      - is_anomaly: whether an anomaly is detected
+      - anomaly_reason: explanation if anomaly detected
+      - recommended_action: TRIGGER_ALARM or SORT_<CATEGORY>
     """
+    w = payload.weight_g
+    d = payload.distance_cm
+    t = payload.dwell_time_sec
+
+    logger.info(f"Predict request — weight={w:.1f}g, dist={d:.1f}cm, dwell={t:.1f}s")
+
+    # ── Step 1: Rule-based anomaly checks ──
+    anomaly_reasons = []
+
+    # Jam detection: object stayed > 7 seconds
+    if t > 7.0:
+        anomaly_reasons.append(f"JAM DETECTED: object stalled for {t:.1f}s")
+
+    # Overload detection: weight exceeds 1200g
+    if w > 1200.0:
+        anomaly_reasons.append(f"OVERLOAD: weight {w:.1f}g exceeds 1200g limit")
+
+    # Sensor fault: impossible distance or negative weight
+    if d < 0 or w < 0:
+        anomaly_reasons.append(f"SENSOR FAULT: distance={d:.1f}cm, weight={w:.1f}g")
+
+    # ── Step 2: ML anomaly detection (Isolation Forest) ──
     try:
-        scaled = _scaler.transform([[hour]])
-        prediction = _peak_model.predict(scaled)[0]
-        logger.info(f"Peak-hour prediction for hour={hour}: {prediction:.2f}")
-        return PeakHourResponse(
-            hour=hour,
-            predicted_activity=round(float(prediction), 2),
-        )
+        features = np.array([[w, t]])
+        scaled = _scaler.transform(features)
+        ml_label = _anomaly_model.predict(scaled)[0]
+        if ml_label == -1:
+            anomaly_reasons.append("ML anomaly detected — unusual weight/dwell pattern")
     except Exception as exc:
-        logger.exception("Peak-hour prediction failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"IsolationForest error: {exc}")
 
-
-@app.post("/predict/maintenance-alert", response_model=AnomalyResponse)
-def maintenance_alert(readings: List[SensorReading]):
-    """
-    Run anomaly detection on a batch of sensor readings.
-    Returns whether each reading is anomalous and a recommendation.
-    """
-    if not readings:
-        raise HTTPException(status_code=400, detail="At least one reading required")
-
+    # ── Step 3: Determine category ──
     try:
-        results = []
-        for r in readings:
-            hour = datetime.utcnow().hour
-            features = np.array([[hour, r.distance_cm]])
-            # Isolation Forest: -1 = anomaly, 1 = normal
-            label = _anomaly_model.predict(features)[0]
-            score = _anomaly_model.decision_function(features)[0]
+        cat_idx = _clf.predict(np.array([[w, t]]))[0]
+        category = CATEGORY_MAP.get(int(cat_idx), "Unknown")
+    except Exception:
+        # Fallback: rule-based classification
+        if w < 250:
+            category = "Light"
+        elif w < 750:
+            category = "Medium"
+        else:
+            category = "Heavy"
 
-            results.append(AnomalyResponse(
-                is_anomaly=bool(label == -1),
-                anomaly_score=round(float(score), 4),
-                recommendation=(
-                    "High anomaly detected — inspect sensor / conveyor belt"
-                    if label == -1
-                    else "Normal operation — no action required"
-                ),
-            ))
+    # ── Step 4: Build response ──
+    is_anomaly = len(anomaly_reasons) > 0
 
-        return {"readings": [r.model_dump() for r in results], "count": len(results)}
-    except Exception as exc:
-        logger.exception("Anomaly detection failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+    if is_anomaly:
+        anomaly_reason = "; ".join(anomaly_reasons)
+        recommended_action = "TRIGGER_ALARM"
+    else:
+        anomaly_reason = ""
+        recommended_action = f"SORT_{category.upper()}"
+
+    logger.info(
+        f"Prediction → category={category}, anomaly={is_anomaly}, "
+        f"action={recommended_action}"
+    )
+
+    return PredictResponse(
+        category=category,
+        is_anomaly=is_anomaly,
+        anomaly_reason=anomaly_reason,
+        recommended_action=recommended_action,
+    )
 
 
 # ──────────────────────────────────────────────

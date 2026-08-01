@@ -4,22 +4,19 @@ import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
+  Clock,
   DoorOpen,
   DoorClosed,
   Gauge,
   LogOut,
-  Palette,
-  Thermometer,
-  Droplets,
   PowerOff,
   RefreshCw,
+  Scale,
 } from 'lucide-react';
 import { clearToken } from '../components/ProtectedRoute';
 import {
   LineChart,
   Line,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -47,18 +44,22 @@ export default function Dashboard() {
   // Latest sensor snapshot
   const [latest, setLatest] = useState({
     distance_cm: '--',
-    color: 'unknown',
-    temperature: '--',
-    humidity: '--',
+    weight_g: '--',
+    dwell_time_sec: '--',
     timestamp: null,
   });
 
   // Time-series arrays for charts
   const [distanceSeries, setDistanceSeries] = useState([]);
-  const [colorCounts, setColorCounts] = useState({ red: 0, green: 0, blue: 0, yellow: 0, unknown: 0 });
-  const [temperatureSeries, setTemperatureSeries] = useState([]);
+  const [weightSeries, setWeightSeries] = useState([]);
   const [alertMessage, setAlertMessage] = useState(null);
   const [gateOpen, setGateOpen] = useState(false);
+
+  // AI classification / anomaly state
+  const [aiCategory, setAiCategory] = useState(null);
+  const [isAnomaly, setIsAnomaly] = useState(false);
+  const [anomalyReason, setAnomalyReason] = useState('');
+  const [recommendedAction, setRecommendedAction] = useState('');
 
   // Connection status ref (avoids stale closure)
   const connectedRef = useRef(false);
@@ -86,9 +87,8 @@ export default function Dashboard() {
     sock.on('sensor-data', (payload) => {
       setLatest({
         distance_cm: payload.distance_cm ?? '--',
-        color: payload.color ?? 'unknown',
-        temperature: payload.temperature ?? '--',
-        humidity: payload.humidity ?? '--',
+        weight_g: payload.weight_g ?? '--',
+        dwell_time_sec: payload.dwell_time_sec ?? '--',
         timestamp: payload.timestamp || new Date().toISOString(),
       });
 
@@ -100,21 +100,26 @@ export default function Dashboard() {
         return next.length > MAX_DATA_POINTS ? next.slice(-MAX_DATA_POINTS) : next;
       });
 
-      setTemperatureSeries((prev) => {
-        const next = [
-          ...prev,
-          {
-            time: t,
-            temperature: payload.temperature ?? 0,
-            humidity: payload.humidity ?? 0,
-          },
-        ];
+      setWeightSeries((prev) => {
+        const next = [...prev, { time: t, weight: payload.weight_g ?? 0 }];
         return next.length > MAX_DATA_POINTS ? next.slice(-MAX_DATA_POINTS) : next;
       });
+    });
 
-      // Color counter for bar chart
-      const c = (payload.color || 'unknown').toLowerCase();
-      setColorCounts((prev) => ({ ...prev, [c]: (prev[c] || 0) + 1 }));
+    sock.on('sensor-ai-update', (payload) => {
+      // Update AI classification
+      setAiCategory(payload.category || null);
+      setIsAnomaly(!!payload.is_anomaly);
+      setAnomalyReason(payload.anomaly_reason || '');
+      setRecommendedAction(payload.recommended_action || '');
+
+      // Also update latest sensor snapshot
+      setLatest({
+        distance_cm: payload.distance_cm ?? '--',
+        weight_g: payload.weight_g ?? '--',
+        dwell_time_sec: payload.dwell_time_sec ?? '--',
+        timestamp: payload.timestamp || new Date().toISOString(),
+      });
     });
 
     setSocket(sock);
@@ -204,6 +209,19 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {/* ── AI Anomaly Banner (flashing red) ── */}
+      {isAnomaly && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-lg border text-sm font-medium
+          bg-red-950/50 border-red-500 text-red-300 animate-pulse">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+          <div className="flex flex-col gap-0.5">
+            <span className="font-bold">ANOMALY DETECTED</span>
+            <span className="text-red-400 text-xs">{anomalyReason}</span>
+            <span className="text-red-500 text-xs">Action: {recommendedAction}</span>
+          </div>
+        </div>
+      )}
+
       {/* ── Alert Banner ── */}
       {alertMessage && (
         <div
@@ -225,25 +243,25 @@ export default function Dashboard() {
           bg="bg-cyan-950/30 border-cyan-700"
         />
         <SensorCard
-          icon={<Palette className="w-5 h-5" />}
-          label="Detected Color"
-          value={latest.color}
-          color="text-purple-400"
-          bg="bg-purple-950/30 border-purple-700"
+          icon={<Scale className="w-5 h-5" />}
+          label="Weight"
+          value={latest.weight_g !== '--' ? `${latest.weight_g} g` : '-- g'}
+          color="text-emerald-400"
+          bg="bg-emerald-950/30 border-emerald-700"
         />
         <SensorCard
-          icon={<Thermometer className="w-5 h-5" />}
-          label="Temperature"
-          value={latest.temperature !== '--' ? `${latest.temperature} °C` : '-- °C'}
-          color="text-orange-400"
-          bg="bg-orange-950/30 border-orange-700"
+          icon={<Clock className="w-5 h-5" />}
+          label="Dwell Time"
+          value={latest.dwell_time_sec !== '--' ? `${latest.dwell_time_sec} s` : '-- s'}
+          color="text-violet-400"
+          bg="bg-violet-950/30 border-violet-700"
         />
         <SensorCard
-          icon={<Droplets className="w-5 h-5" />}
-          label="Humidity"
-          value={latest.humidity !== '--' ? `${latest.humidity} %` : '-- %'}
-          color="text-blue-400"
-          bg="bg-blue-950/30 border-blue-700"
+          icon={<Activity className="w-5 h-5" />}
+          label="AI Classification"
+          value={aiCategory || '--'}
+          color={isAnomaly ? 'text-red-400' : 'text-yellow-400'}
+          bg={isAnomaly ? 'bg-red-950/40 border-red-700' : 'bg-yellow-950/30 border-yellow-700'}
         />
       </div>
 
@@ -325,10 +343,10 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </ChartCard>
 
-        {/* Temperature / Humidity Line Chart */}
-        <ChartCard title="Temperature &amp; Humidity">
+        {/* Weight Line Chart */}
+        <ChartCard title="Weight Over Time (g)">
           <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={temperatureSeries}>
+            <LineChart data={weightSeries}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
               <XAxis
                 dataKey="time"
@@ -351,43 +369,14 @@ export default function Dashboard() {
               <Legend />
               <Line
                 type="monotone"
-                dataKey="temperature"
-                stroke="#fb923c"
+                dataKey="weight"
+                stroke="#34d399"
                 strokeWidth={2}
                 dot={false}
-                name="Temp (°C)"
-              />
-              <Line
-                type="monotone"
-                dataKey="humidity"
-                stroke="#60a5fa"
-                strokeWidth={2}
-                dot={false}
-                name="Humidity (%)"
+                activeDot={{ r: 5 }}
+                name="Weight (g)"
               />
             </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        {/* Color Detection Bar Chart */}
-        <ChartCard title="Detected Colors (cumulative)">
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart
-              data={Object.entries(colorCounts).map(([color, count]) => ({ color, count }))}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="color" stroke="#94a3b8" fontSize={12} tick={{ fill: '#94a3b8' }} />
-              <YAxis stroke="#94a3b8" fontSize={12} tick={{ fill: '#94a3b8' }} allowDecimals={false} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#1e293b',
-                  border: '1px solid #475569',
-                  borderRadius: '8px',
-                  color: '#f1f5f9',
-                }}
-              />
-              <Bar dataKey="count" fill="#a78bfa" radius={[4, 4, 0, 0]} name="Count" />
-            </BarChart>
           </ResponsiveContainer>
         </ChartCard>
 

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "author": "Smart Warehouse — ESP32 Wokwi Simulation",
+  "author": "Smart Warehouse Sorting Station — ESP32 Wokwi Simulation v2",
   "editor": "wokwi",
   "parts": [
     {
@@ -13,38 +13,48 @@
     {
       "type": "wokwi/hc-sr04",
       "id": "ultrasonic",
-      "top": -120,
-      "left": -60,
+      "top": -180,
+      "left": 50,
       "attrs": {}
     },
     {
-      "type": "wokwi/servo",
+      "type": "wokwi-hx711",
+      "id": "hx711",
+      "top": 200,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-servo",
       "id": "servo",
-      "top": 120,
-      "left": -80,
+      "top": -100,
+      "left": 420,
       "attrs": {}
     },
     {
-      "type": "wokwi/buzzer",
+      "type": "wokwi-buzzer",
       "id": "buzzer",
-      "top": 130,
-      "left": 320,
+      "top": 200,
+      "left": 380,
       "attrs": {}
     }
   ],
   "connections": [
-    ["esp32:GND.1", "ultrasonic:GND", "black", [236, -40, 236, -80]],
-    ["esp32:VIN.5", "ultrasonic:VCC", "red", [248, -40, 248, -80]],
+    ["esp32:VIN.5", "ultrasonic:VCC", "red", [248, -20, 80, -20, 80, -140]],
+    ["esp32:GND.1", "ultrasonic:GND", "black", [236, -20, 236, -60, 120, -60, 120, -140]],
+    ["esp32:5", "ultrasonic:TRIG", "orange", [336, -20, 336, -80, 160, -80, 160, -130]],
+    ["esp32:18", "ultrasonic:ECHO", "yellow", [354, -20, 354, -100, 180, -100, 180, -140]],
 
-    ["esp32:12", "ultrasonic:TRIG", "orange", [300, -40, 140, -40, 140, -70]],
-    ["esp32:13", "ultrasonic:ECHO", "yellow", [318, -40, 160, -40, 160, -80]],
+    ["esp32:3V3", "hx711:VCC", "red", [270, 40, 40, 40, 40, 240]],
+    ["esp32:GND.1", "hx711:GND", "black", [236, 40, 236, 80, 60, 80, 60, 240]],
+    ["esp32:32", "hx711:DOUT", "green", [420, 40, 420, 120, 80, 120, 80, 230]],
+    ["esp32:33", "hx711:SCK", "blue", [438, 40, 438, 140, 100, 140, 100, 240]],
 
-    ["esp32:GND.2", "servo:GND", "black", [270, 40, 270, 80, 100, 80]],
-    ["esp32:VIN.5", "servo:V+", "red", [248, 40, 248, 80, 80, 80]],
+    ["esp32:VIN.5", "servo:V+", "red", [248, 40, 440, 40, 440, -60]],
+    ["esp32:GND.2", "servo:GND", "black", [270, 40, 270, 60, 460, 60, 460, -60]],
+    ["esp32:19", "servo:PWM", "blue", [372, 40, 372, 80, 480, 80, 480, -50]],
 
-    ["esp32:18", "servo:PWM", "blue", [336, 40, 336, 100, 60, 100]],
-
-    ["esp32:GND.2", "buzzer:GND", "black", [270, 40, 270, 80, 370, 80]],
-    ["esp32:19", "buzzer:IN", "purple", [354, 40, 354, 80, 390, 80]]
+    ["esp32:21", "buzzer:VCC", "purple", [390, 40, 400, 40, 400, 240]],
+    ["esp32:GND.2", "buzzer:GND", "black", [270, 40, 270, 80, 420, 80, 420, 240]]
   ]
 }
