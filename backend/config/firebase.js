@@ -1,4 +1,5 @@
 const admin = require('firebase-admin');
+const path = require('path');
 
 /**
  * Initialise Firebase Admin SDK using a service-account key file
@@ -6,8 +7,9 @@ const admin = require('firebase-admin');
  *
  * The service-account JSON should NOT be committed to version control.
  */
-const serviceAccountPath =
-  process.env.FIREBASE_SERVICE_ACCOUNT_PATH || './config/serviceAccountKey.json';
+const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH
+  ? path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH)
+  : path.join(__dirname, 'serviceAccountKey.json');
 
 let db = null;
 
