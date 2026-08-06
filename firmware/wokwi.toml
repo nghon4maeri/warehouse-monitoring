@@ -1,8 +1,3 @@
 [wokwi]
 version = 1
-
-# Firmware entry point — the main sketch compiled for ESP32
-firmware = "firmware.ino"
-
-# Optional: precompiled ELF binary (leave empty to compile from source)
-elf = ""
+firmware = "sketch.ino"

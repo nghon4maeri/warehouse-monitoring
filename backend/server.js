@@ -11,7 +11,8 @@
  *   services/notificationService.js  — Đàng Thế Tony
  */
 
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 const http                       = require('http');
 const express                    = require('express');
