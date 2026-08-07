@@ -26,6 +26,7 @@ const { initMQTT, onSensorData, publishActuator }
                                   = require('./services/mqttService');
 const { setIO, handleSensorData } = require('./controllers/sensorController');
 const { getHistory }              = require('./services/firebaseService');
+const { getForecast }             = require('./services/aiService');
 
 /* ───── Configuration ───── */
 const PORT        = process.env.PORT || 4000;
@@ -67,6 +68,14 @@ pool.query('SELECT NOW()')
 initMQTT();
 setIO(io);
 onSensorData(handleSensorData);
+
+/* ───── Forecast Interval (every 30s) ───── */
+setInterval(async () => {
+  try {
+    const f = await getForecast();
+    io.emit('forecast-update', f);
+  } catch (_) { /* AI may not be running */ }
+}, 30_000);
 
 /* ───── Socket.io Events ───── */
 io.on('connection', (socket) => {

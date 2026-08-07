@@ -1,54 +1,77 @@
 """
-Smart Warehouse — AI Prediction Module v2
-==========================================
-FastAPI micro-service providing:
-  - POST /predict  — classify cargo & detect anomalies
-
-Uses:
-  - DecisionTreeClassifier (Light / Medium / Heavy)
-  - IsolationForest + rule-based checks (jams, overload, bad readings)
+Smart Warehouse — AI Module v3
+===============================
+- POST /predict   — classify cargo + detect anomalies (rule-based)
+- GET  /forecast  — predict pkgs/min next 10 min (Linear Regression)
+- POST /log       — chỉ log data cho forecast, ko cần classify
 """
 
-import os
-import logging
-from typing import Optional
-
-import numpy as np
-from fastapi import FastAPI, HTTPException
+import time
+from collections import defaultdict
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import logging
 
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
-
-# ──────────────────────────────────────────────
-#  App Initialisation
-# ──────────────────────────────────────────────
-app = FastAPI(
-    title="Warehouse AI Module v2",
-    version="2.0.0",
-    description="ML cargo classification & anomaly detection for IoT warehouse",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Warehouse AI Module", version="3.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-module")
 
-# ──────────────────────────────────────────────
-#  Pydantic Schemas
-# ──────────────────────────────────────────────
+# ═══════════════════════
+#  Thresholds
+# ═══════════════════════
+LIGHT_MAX   = 250
+MEDIUM_MAX  = 750
+HEAVY_MAX   = 1200
+JAM_DWELL_S = 7.0
+OBJECT_NEAR = 15.0
+
+# ═══════════════════════
+#  Data storage for forecast
+# ═══════════════════════
+minute_counts: dict[int, int] = defaultdict(int)   # minute_timestamp → count
+
+def _cleanup_storage():
+    """Giữ tối đa 90 phút dữ liệu gần nhất"""
+    if len(minute_counts) <= 90:
+        return
+    cutoff = int(time.time()) // 60 - 90
+    for k in list(minute_counts.keys()):
+        if k < cutoff:
+            del minute_counts[k]
+
+def _log_reading():
+    now = int(time.time())
+    minute_key = now // 60
+    minute_counts[minute_key] += 1
+    _cleanup_storage()
+
+# ═══════════════════════
+#  ML: Simple Linear Regression
+#     y = slope * x + intercept
+#  (least squares, pure Python)
+# ═══════════════════════
+def linear_regression(x: list[float], y: list[float]):
+    n = len(x)
+    if n < 2:
+        return 0.0, sum(y) / n if n else 0.0
+    mx = sum(x) / n
+    my = sum(y) / n
+    num = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+    den = sum((x[i] - mx) ** 2 for i in range(n))
+    slope = num / den if den != 0 else 0.0
+    intercept = my - slope * mx
+    return slope, intercept
+
+# ═══════════════════════
+#  Schemas
+# ═══════════════════════
 class SensorPayload(BaseModel):
     weight_g: float
     distance_cm: float
     dwell_time_sec: float
-
 
 class PredictResponse(BaseModel):
     category: str
@@ -56,154 +79,106 @@ class PredictResponse(BaseModel):
     anomaly_reason: str
     recommended_action: str
 
+class ForecastPoint(BaseModel):
+    minute: int
+    predicted_packages: float
 
-# ──────────────────────────────────────────────
-#  Training Data for DecisionTreeClassifier
-# ──────────────────────────────────────────────
-# Features: [weight_g, dwell_time_sec]
-# Labels:   0=Light, 1=Medium, 2=Heavy
+class ForecastResponse(BaseModel):
+    current_rate: float
+    trend: str
+    predictions: list[ForecastPoint]
+    data_points: int
 
-def _build_training_data():
-    X, y = [], []
+# ═══════════════════════
+#  Classification
+# ═══════════════════════
+def classify_cargo(weight_g: float) -> str:
+    if weight_g <= 0:
+        return "None"
+    elif weight_g < LIGHT_MAX:
+        return "Light"
+    elif weight_g < MEDIUM_MAX:
+        return "Medium"
+    elif weight_g <= HEAVY_MAX:
+        return "Heavy"
+    else:
+        return "Heavy"
 
-    # Light:   0–250g
-    for _ in range(40):
-        w = np.random.uniform(0, 249)
-        d = np.random.uniform(0.5, 3.0)
-        X.append([w, d])
-        y.append(0)
+def detect_anomalies(weight_g: float, distance_cm: float, dwell_s: float) -> list[str]:
+    reasons = []
+    if distance_cm < 0:
+        reasons.append(f"SENSOR FAULT — no echo")
+    if weight_g < 0:
+        reasons.append(f"SENSOR FAULT — negative weight")
+    if distance_cm >= OBJECT_NEAR and dwell_s <= 0:
+        pass
+    elif dwell_s > JAM_DWELL_S:
+        reasons.append(f"JAM — stalled {dwell_s:.1f}s")
+    if weight_g > HEAVY_MAX:
+        reasons.append(f"OVERLOAD — {weight_g:.0f}g > {HEAVY_MAX}g")
+    return reasons
 
-    # Medium:  250–750g
-    for _ in range(40):
-        w = np.random.uniform(250, 749)
-        d = np.random.uniform(1.0, 5.0)
-        X.append([w, d])
-        y.append(1)
-
-    # Heavy:   750–1200g
-    for _ in range(40):
-        w = np.random.uniform(750, 1200)
-        d = np.random.uniform(2.0, 7.0)
-        X.append([w, d])
-        y.append(2)
-
-    return np.array(X), np.array(y)
-
-
-X_train, y_train = _build_training_data()
-
-# ── Decision Tree Classifier ──
-_clf = DecisionTreeClassifier(max_depth=4, random_state=42)
-_clf.fit(X_train, y_train)
-
-# ── Isolation Forest for anomaly detection ──
-_anomaly_model = IsolationForest(
-    n_estimators=100,
-    contamination=0.05,
-    random_state=42,
-).fit(X_train)
-
-# ── Scaler for isolation forest input ──
-_scaler = StandardScaler().fit(X_train)
-
-CATEGORY_MAP = {0: "Light", 1: "Medium", 2: "Heavy"}
-
-
-# ──────────────────────────────────────────────
+# ═══════════════════════
 #  Endpoints
-# ──────────────────────────────────────────────
-
+# ═══════════════════════
 @app.get("/")
 def root():
-    return {"service": "warehouse-ai", "status": "ok", "version": "2.0.0"}
-
+    return {"service": "warehouse-ai", "status": "ok", "version": "3.0.0"}
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(payload: SensorPayload):
-    """
-    Classify cargo and detect anomalies.
+    w, d, t = payload.weight_g, payload.distance_cm, payload.dwell_time_sec
+    _log_reading()
 
-    Input:
-      - weight_g: measured weight of the cargo
-      - distance_cm: ultrasonic distance reading
-      - dwell_time_sec: time the object has been in the station zone
+    category = classify_cargo(w)
+    anomalies = detect_anomalies(w, d, t)
 
-    Returns:
-      - category: "Light", "Medium", or "Heavy"
-      - is_anomaly: whether an anomaly is detected
-      - anomaly_reason: explanation if anomaly detected
-      - recommended_action: TRIGGER_ALARM or SORT_<CATEGORY>
-    """
-    w = payload.weight_g
-    d = payload.distance_cm
-    t = payload.dwell_time_sec
-
-    logger.info(f"Predict request — weight={w:.1f}g, dist={d:.1f}cm, dwell={t:.1f}s")
-
-    # ── Step 1: Rule-based anomaly checks ──
-    anomaly_reasons = []
-
-    # Jam detection: object stayed > 7 seconds
-    if t > 7.0:
-        anomaly_reasons.append(f"JAM DETECTED: object stalled for {t:.1f}s")
-
-    # Overload detection: weight exceeds 1200g
-    if w > 1200.0:
-        anomaly_reasons.append(f"OVERLOAD: weight {w:.1f}g exceeds 1200g limit")
-
-    # Sensor fault: impossible distance or negative weight
-    if d < 0 or w < 0:
-        anomaly_reasons.append(f"SENSOR FAULT: distance={d:.1f}cm, weight={w:.1f}g")
-
-    # ── Step 2: ML anomaly detection (Isolation Forest) ──
-    try:
-        features = np.array([[w, t]])
-        scaled = _scaler.transform(features)
-        ml_label = _anomaly_model.predict(scaled)[0]
-        if ml_label == -1:
-            anomaly_reasons.append("ML anomaly detected — unusual weight/dwell pattern")
-    except Exception as exc:
-        logger.error(f"IsolationForest error: {exc}")
-
-    # ── Step 3: Determine category ──
-    try:
-        cat_idx = _clf.predict(np.array([[w, t]]))[0]
-        category = CATEGORY_MAP.get(int(cat_idx), "Unknown")
-    except Exception:
-        # Fallback: rule-based classification
-        if w < 250:
-            category = "Light"
-        elif w < 750:
-            category = "Medium"
-        else:
-            category = "Heavy"
-
-    # ── Step 4: Build response ──
-    is_anomaly = len(anomaly_reasons) > 0
-
-    if is_anomaly:
-        anomaly_reason = "; ".join(anomaly_reasons)
-        recommended_action = "TRIGGER_ALARM"
-    else:
-        anomaly_reason = ""
-        recommended_action = f"SORT_{category.upper()}"
-
-    logger.info(
-        f"Prediction → category={category}, anomaly={is_anomaly}, "
-        f"action={recommended_action}"
-    )
-
+    if anomalies:
+        return PredictResponse(
+            category=category, is_anomaly=True,
+            anomaly_reason="; ".join(anomalies),
+            recommended_action="TRIGGER_ALARM",
+        )
     return PredictResponse(
-        category=category,
-        is_anomaly=is_anomaly,
-        anomaly_reason=anomaly_reason,
-        recommended_action=recommended_action,
+        category=category, is_anomaly=False,
+        anomaly_reason="", recommended_action=f"SORT_{category.upper()}",
     )
 
+@app.post("/log")
+def log_reading(payload: SensorPayload):
+    """Chỉ log data cho forecast (gọi từ backend mỗi khi có sensor data)"""
+    _log_reading()
+    return {"ok": True, "minute_key": int(time.time()) // 60}
 
-# ──────────────────────────────────────────────
-#  Entry Point
-# ──────────────────────────────────────────────
+@app.get("/forecast", response_model=ForecastResponse)
+def forecast():
+    """Dự đoán số packages/phút trong 10 phút tiếp theo"""
+    sorted_mins = sorted(minute_counts.items())[-30:]
+    if len(sorted_mins) < 3:
+        return ForecastResponse(current_rate=0, trend="insufficient_data", predictions=[], data_points=len(sorted_mins))
+
+    x = list(range(len(sorted_mins)))
+    y = [count for _, count in sorted_mins]
+    slope, intercept = linear_regression(x, y)
+
+    recent_5 = [c for _, c in sorted_mins[-5:]]
+    current_rate = sum(recent_5) / len(recent_5) if recent_5 else 0
+
+    trend = "up" if slope > 0.15 else "down" if slope < -0.15 else "stable"
+
+    predictions = []
+    for i in range(1, 11):
+        pred = slope * (len(x) + i - 1) + intercept
+        predictions.append(ForecastPoint(minute=i, predicted_packages=max(0, round(pred, 1))))
+
+    logger.info(f"Forecast: rate={current_rate:.1f}/min, trend={trend}, slope={slope:.3f}")
+    return ForecastResponse(
+        current_rate=round(current_rate, 1),
+        trend=trend,
+        predictions=predictions,
+        data_points=len(sorted_mins),
+    )
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

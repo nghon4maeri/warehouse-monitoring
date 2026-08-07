@@ -1,8 +1,14 @@
+// ============================================================
+// Smart Warehouse — ESP32 Firmware
+// Nguyễn Hồ Nam / Trần Hoàng Minh Khang / Đàng Thế Tony
+// ============================================================
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <HX711.h>
 
+/* ========== Pin Definitions ========== */
 #define TRIG_PIN    5
 #define ECHO_PIN    18
 #define LC_DOUT     32
@@ -10,10 +16,12 @@
 #define SERVO_PIN   19
 #define BUZZER_PIN  21
 
+/* ========== Servo PWM (50Hz, 16-bit, 0-180°) ========== */
 int angleToDuty(int angle) {
   return map(angle, 0, 180, 3277, 6554);
 }
 
+/* ========== Network & MQTT ========== */
 const char* WIFI_SSID      = "Wokwi-GUEST";
 const char* WIFI_PASSWORD  = "";
 const char* MQTT_BROKER    = "broker.hivemq.com";
@@ -25,18 +33,26 @@ const char* TOPIC_ACTUATORS = "warehouse/actuators";
 WiFiClient   wifiClient;
 PubSubClient mqttClient(wifiClient);
 
+/* ========== Ultrasonic State ========== */
 bool          objectPresent       = false;
 unsigned long objectPresentStart  = 0;
 float         dwellTimeSec        = 0.0;
 
+/* ========== Loadcell ========== */
 HX711 loadcell;
-const float CAL_SCALE = 224.0f;    // raw ÷ 224 ≈ grams
+float calScale    = 224.0f;
+bool  calibrated  = false;
 
+/* ========== Buzzer ========== */
 bool alarmActive = false;
 
+/* ========== Timer ========== */
 unsigned long lastSensorRead = 0;
-const unsigned long SENSOR_INTERVAL = 1000;
+const unsigned long SENSOR_INTERVAL = 3000;
 
+/* ============================================================
+ *  SETUP
+ * ============================================================ */
 void setup() {
   Serial.begin(115200);
 
@@ -63,6 +79,9 @@ void setup() {
   Serial.println("[READY]\n");
 }
 
+/* ============================================================
+ *  LOOP
+ * ============================================================ */
 void loop() {
   if (!mqttClient.connected()) connectMQTT();
   mqttClient.loop();
@@ -73,6 +92,8 @@ void loop() {
     publishSensorData();
   }
 }
+
+/* ==================== ULTRASONIC HC-SR04 ==================== */
 
 float readUltrasonicDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -109,12 +130,26 @@ void updateDwell(float dist_cm) {
 
 float getDwellTimeSec() { return dwellTimeSec; }
 
+/* ==================== LOADCELL HX711 ==================== */
+
 float readWeightGrams() {
   if (!loadcell.is_ready()) return 0.0f;
   long raw = loadcell.get_units(5);
-  float w = raw / CAL_SCALE;
-  return (w < 0.5f) ? 0.0f : w;
+  float w = raw / calScale;
+
+  // Auto-calibrate: nếu kéo slider max (>5000g), tự tính scale
+  if (w > 5500.0f && !calibrated) {
+    calScale = raw / 5000.0f;
+    calibrated = true;
+    Serial.printf("[CAL] Scale adjusted to %.1f (raw=%ld → 5000g)\n", calScale, raw);
+    w = 5000.0f;
+  }
+
+  if (w < 0.5f) w = 0.0f;
+  return w;
 }
+
+/* ==================== ACTUATORS ==================== */
 
 void setServoAngle(int angle) {
   ledcWrite(SERVO_PIN, angleToDuty(angle));
@@ -140,11 +175,12 @@ void handleCommand(const String& cmd) {
   else if (cmd == "gate_medium") setServoAngle(90);
   else if (cmd == "gate_heavy")  setServoAngle(135);
   else if (cmd == "gate_close")  setServoAngle(0);
-  else if (cmd == "gate_open")   setServoAngle(0);     // mở cổng = về vị trí gốc
+  else if (cmd == "gate_open")   setServoAngle(0);
   else if (cmd == "alarm_on")    alarmOn();
   else if (cmd == "alarm_off")   alarmOff();
-  else Serial.printf("[CMD] Unknown: %s\n", cmd.c_str());
 }
+
+/* ==================== WiFi ==================== */
 
 void connectWiFi() {
   Serial.printf("[WiFi] Connecting to %s ...\n", WIFI_SSID);
@@ -156,6 +192,8 @@ void connectWiFi() {
   Serial.println(WiFi.status() == WL_CONNECTED
     ? "\n[WiFi] Connected" : "\n[WiFi] FAILED");
 }
+
+/* ==================== MQTT ==================== */
 
 void connectMQTT() {
   while (!mqttClient.connected()) {
@@ -187,6 +225,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   handleCommand(cmd);
 }
+
+/* ==================== PUBLISH ==================== */
 
 void publishSensorData() {
   float dist = readUltrasonicDistance();
