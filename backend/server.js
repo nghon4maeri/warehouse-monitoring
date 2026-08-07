@@ -26,7 +26,6 @@ const { initMQTT, onSensorData, publishActuator }
                                   = require('./services/mqttService');
 const { setIO, handleSensorData } = require('./controllers/sensorController');
 const { getHistory }              = require('./services/firebaseService');
-const { getForecast }             = require('./services/aiService');
 
 /* ───── Configuration ───── */
 const PORT        = process.env.PORT || 4000;
@@ -59,6 +58,15 @@ app.post('/api/actuators', authenticate, (req, res) => {
   res.json({ success: true, command });
 });
 
+app.get('/api/history', async (_req, res) => {
+  try {
+    const data = await getHistory(100);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ───── PostgreSQL check ───── */
 pool.query('SELECT NOW()')
   .then(({ rows }) => console.log('[PG] Connected — server time:', rows[0].now))
@@ -68,14 +76,6 @@ pool.query('SELECT NOW()')
 initMQTT();
 setIO(io);
 onSensorData(handleSensorData);
-
-/* ───── Forecast Interval (every 30s) ───── */
-setInterval(async () => {
-  try {
-    const f = await getForecast();
-    io.emit('forecast-update', f);
-  } catch (_) { /* AI may not be running */ }
-}, 30_000);
 
 /* ───── Socket.io Events ───── */
 io.on('connection', (socket) => {

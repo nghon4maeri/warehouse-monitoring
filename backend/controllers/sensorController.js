@@ -9,7 +9,7 @@
  */
 
 const { saveSensorReading }            = require('../services/firebaseService');
-const { predictCargo, logReading }     = require('../services/aiService');
+const { predictCargo }                = require('../services/aiService');
 const { publishActuator }              = require('../services/mqttService');
 const { sendTelegramAlert, sendEmailAlert }
                                        = require('../services/notificationService');
@@ -23,7 +23,6 @@ function setIO(socketIO) {
 
 async function handleSensorData(payload) {
   saveSensorReading(payload);
-  logReading(payload);   // log mọi reading cho forecast
 
   if (io) io.emit('sensor-data', payload);
 
