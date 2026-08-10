@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Activity, LogOut } from 'lucide-react';
+import { AlertTriangle, Activity, LogOut, ShieldAlert, DoorOpen, DoorClosed, Bell, BellOff } from 'lucide-react';
 import { clearToken } from '../components/ProtectedRoute';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
@@ -17,21 +17,26 @@ const formatTime = (iso) => {
 
 /* ========== Gauge Component ========== */
 function Gauge({ value, max, label, unit, color }) {
-  const pct = Math.min(Math.max((value || 0) / max, 0), 1) * 100;
-  const angle = (pct / 100) * 180; // 0 to 180 degrees
-  const rad = (angle - 90) * (Math.PI / 180);
-  const r = 40;
-  const cx = 50, cy = 55;
-  const x = cx + r * Math.cos(rad);
-  const y = cy + r * Math.sin(rad);
+  const pct = Math.min(Math.max((value || 0) / max, 0), 1);
+  const circumference = 2 * Math.PI * 38;
+  const filled = pct * circumference * 0.5;
 
   return (
     <div className="flex flex-col items-center">
       <svg viewBox="0 0 100 70" className="w-32 h-24">
-        <path d="M10 55 A40 40 0 0 1 90 55" fill="none" stroke="#334155" strokeWidth="8" strokeLinecap="round" />
-        <path d={`M10 55 A40 40 0 0 1 ${x} ${y}`} fill="none" stroke={color} strokeWidth="8" strokeLinecap="round"
-          style={{ transition: 'all 0.5s ease' }} />
-        <circle cx={x} cy={y} r="4" fill={color} />
+        {/* Background half-circle */}
+        <path d="M12 55 A38 38 0 0 1 88 55" fill="none" stroke="#334155" strokeWidth="6" strokeLinecap="round" />
+        {/* Foreground filled arc */}
+        <path
+          d="M12 55 A38 38 0 0 1 88 55"
+          fill="none"
+          stroke={color}
+          strokeWidth="6"
+          strokeLinecap="round"
+          strokeDasharray={`${filled} ${circumference}`}
+          style={{ transition: 'stroke-dasharray 0.5s ease' }}
+        />
+        {/* Value text */}
         <text x="50" y="66" textAnchor="middle" fill="#94a3b8" fontSize="10">{value ?? '--'} {unit}</text>
       </svg>
       <span className="text-xs text-gray-500 mt-0.5">{label}</span>
@@ -54,10 +59,21 @@ export default function Dashboard() {
   const [anomalyReason, setAnomalyReason] = useState('');
   const [recommendedAction, setRecommendedAction] = useState('');
   const [stats, setStats] = useState({ total: 0, anomalies: 0 });
+  const [categoryCounts, setCategoryCounts] = useState({ Light: 0, Medium: 0, Heavy: 0, Anomaly: 0 });
+  const [gateOpen, setGateOpen] = useState(false);
+  const [alarmOn, setAlarmOn] = useState(false);
+  const socketRef = useRef(null);
 
   const connectedRef = useRef(false);
+  const historyLoadedRef = useRef(false);
 
-  /* ───── Fetch history from Firebase ───── */
+  const classifyWeight = (w) => {
+    if (w == null || w <= 0) return 'Anomaly';
+    if (w < 250) return 'Light';
+    if (w < 750) return 'Medium';
+    return 'Heavy';
+  };
+
   const fetchHistory = async () => {
     try {
       const res = await fetch('/api/history');
@@ -70,10 +86,33 @@ export default function Dashboard() {
       }
       items.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
       setHistory(items.slice(0, 20));
-    } catch (_) { /* Firebase may not be configured */ }
+
+      if (!historyLoadedRef.current && items.length > 0) {
+        historyLoadedRef.current = true;
+        const sorted = [...items].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+        const recent = sorted.slice(-MAX_DATA_POINTS);
+
+        setDistanceSeries(recent.map((r) => ({
+          time: formatTime(r.timestamp),
+          distance: r.distance_cm ?? 0,
+        })));
+
+        setWeightSeries(recent.map((r) => ({
+          time: formatTime(r.timestamp),
+          weight: r.weight_g ?? 0,
+        })));
+
+        const counts = { Light: 0, Medium: 0, Heavy: 0, Anomaly: 0 };
+        for (const r of sorted) {
+          const cat = classifyWeight(r.weight_g);
+          counts[cat] = (counts[cat] || 0) + 1;
+        }
+        setCategoryCounts(counts);
+        setStats((prev) => ({ ...prev, total: sorted.length }));
+      }
+    } catch (_) {}
   };
 
-  /* ───── Socket.io ───── */
   useEffect(() => {
     const sock = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
@@ -84,6 +123,7 @@ export default function Dashboard() {
     sock.on('connect', () => {
       setConnected(true);
       connectedRef.current = true;
+      socketRef.current = sock;
       fetchHistory();
       sock.emit('request-history', 50);
     });
@@ -123,14 +163,14 @@ export default function Dashboard() {
       setRecommendedAction(payload.recommended_action || '');
       if (payload.is_anomaly) {
         setStats((prev) => ({ ...prev, anomalies: prev.anomalies + 1 }));
+        setCategoryCounts((prev) => ({ ...prev, Anomaly: prev.Anomaly + 1 }));
+      } else if (payload.category) {
+        setCategoryCounts((prev) => ({ ...prev, [payload.category]: (prev[payload.category] || 0) + 1 }));
       }
     });
 
-    const interval = setInterval(fetchHistory, 10000);
-
     return () => {
       sock.disconnect();
-      clearInterval(interval);
     };
   }, []);
 
@@ -139,7 +179,6 @@ export default function Dashboard() {
     navigate('/login', { replace: true });
   };
 
-  /* ───── Render ───── */
   return (
     <div className="min-h-screen bg-gray-950 p-3 md:p-4 space-y-3">
       {/* Header */}
@@ -172,6 +211,51 @@ export default function Dashboard() {
           <span className="text-red-500">→ {recommendedAction}</span>
         </div>
       )}
+
+      {/* Actuator Control Panel */}
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+        <h3 className="text-xs font-semibold text-gray-400 mb-3 flex items-center gap-2">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" /> Actuator Controls
+        </h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => { socketRef.current?.emit('gate-trigger', 'open'); setGateOpen(true); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${gateOpen ? 'bg-emerald-900/40 text-emerald-400 border-emerald-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <DoorOpen className="w-3.5 h-3.5" /> Open Gate
+          </button>
+          <button
+            onClick={() => { socketRef.current?.emit('gate-trigger', 'close'); setGateOpen(false); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${!gateOpen ? 'bg-orange-900/40 text-orange-400 border-orange-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <DoorClosed className="w-3.5 h-3.5" /> Close Gate
+          </button>
+          <span className="text-gray-600 mx-1">|</span>
+          <button
+            onClick={() => { socketRef.current?.emit('alarm-toggle', true); setAlarmOn(true); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${alarmOn ? 'bg-red-900/40 text-red-400 border-red-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <Bell className="w-3.5 h-3.5" /> Alarm On
+          </button>
+          <button
+            onClick={() => { socketRef.current?.emit('alarm-toggle', false); setAlarmOn(false); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${!alarmOn ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <BellOff className="w-3.5 h-3.5" /> Alarm Off
+          </button>
+          <span className="text-gray-600 mx-1">|</span>
+          <button
+            onClick={() => { socketRef.current?.emit('emergency-stop'); setGateOpen(false); setAlarmOn(true); }}
+            className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border
+              bg-red-700 hover:bg-red-600 text-white border-red-500 transition-colors animate-pulse">
+            <ShieldAlert className="w-3.5 h-3.5" /> EMERGENCY STOP
+          </button>
+        </div>
+        <div className="flex gap-4 mt-2 text-xs text-gray-500">
+          <span>Gate: <span className={gateOpen ? 'text-emerald-400' : 'text-orange-400'}>{gateOpen ? 'OPEN' : 'CLOSED'}</span></span>
+          <span>Alarm: <span className={alarmOn ? 'text-red-400' : 'text-slate-400'}>{alarmOn ? 'ACTIVE' : 'OFF'}</span></span>
+        </div>
+      </div>
 
       {/* Gauges + Sensor Cards */}
       <div className="grid grid-cols-3 lg:grid-cols-5 gap-3">
@@ -222,43 +306,20 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* History Table from Firebase */}
+      {/* Classification Distribution Bar Chart */}
       <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs font-semibold text-gray-400 flex items-center gap-2">
-            <Activity className="w-3.5 h-3.5 text-emerald-400" /> Firebase History (last 20)
-          </h3>
-          <button onClick={fetchHistory} className="text-xs text-gray-500 hover:text-gray-300">↻ Refresh</button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-gray-300">
-            <thead>
-              <tr className="text-left text-gray-500 border-b border-gray-700">
-                <th className="pb-2 pr-3 font-medium">Time</th>
-                <th className="pb-2 pr-3 font-medium">Device</th>
-                <th className="pb-2 pr-3 font-medium text-right">Distance</th>
-                <th className="pb-2 pr-3 font-medium text-right">Weight</th>
-                <th className="pb-2 font-medium text-right">Dwell</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.length === 0 ? (
-                <tr><td colSpan={5} className="py-4 text-center text-gray-600">No data in Firebase yet — start the simulator</td></tr>
-              ) : (
-                history.map((row, i) => (
-                  <tr key={i} className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
-                    <td className="py-1.5 pr-3 text-gray-400 whitespace-nowrap">{formatTime(row.timestamp)}</td>
-                    <td className="py-1.5 pr-3">{row.deviceId}</td>
-                    <td className="py-1.5 pr-3 text-right text-cyan-400">{row.distance_cm} cm</td>
-                    <td className="py-1.5 pr-3 text-right text-emerald-400">{row.weight_g} g</td>
-                    <td className="py-1.5 text-right text-violet-400">{row.dwell_time_sec}s</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <h3 className="text-xs font-semibold text-gray-400 mb-2">Classification Distribution</h3>
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={Object.entries(categoryCounts).map(([name, count]) => ({ name, count }))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+            <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} tick={{ fill: '#94a3b8' }} />
+            <YAxis stroke="#94a3b8" fontSize={10} tick={{ fill: '#94a3b8' }} allowDecimals={false} />
+            <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: '6px', color: '#f1f5f9', fontSize: '12px' }} />
+            <Bar dataKey="count" fill="#22d3ee" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
       </div>
+
     </div>
   );
 }

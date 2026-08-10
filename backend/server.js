@@ -26,6 +26,9 @@ const { initMQTT, onSensorData, publishActuator }
                                   = require('./services/mqttService');
 const { setIO, handleSensorData } = require('./controllers/sensorController');
 const { getHistory }              = require('./services/firebaseService');
+const { startScheduledReports }   = require('./services/notificationService');
+const { sendShiftReport }         = require('./services/notificationService');
+const { startChatbot }            = require('./services/discordBotService');
 
 /* ───── Configuration ───── */
 const PORT        = process.env.PORT || 4000;
@@ -62,6 +65,15 @@ app.get('/api/history', async (_req, res) => {
   try {
     const data = await getHistory(100);
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/report/send', async (_req, res) => {
+  try {
+    await sendShiftReport();
+    res.json({ success: true, message: 'Shift report sent' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -110,6 +122,8 @@ io.on('connection', (socket) => {
 });
 
 /* ───── Start ───── */
+startScheduledReports();
+startChatbot();
 server.listen(PORT, () => {
   console.log(`[Server] Warehouse backend listening on http://localhost:${PORT}`);
 });
