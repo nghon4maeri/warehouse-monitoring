@@ -25,6 +25,18 @@ services:
       start_period: 10s
 
   # ───────────────────────────────────────────
+  #  AI Microservice — Python FastAPI
+  # ───────────────────────────────────────────
+  ai-module:
+    build:
+      context: ./ai-module
+      dockerfile: Dockerfile
+    container_name: warehouse-ai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
+  # ───────────────────────────────────────────
   #  Backend — Express + Socket.io + MQTT
   # ───────────────────────────────────────────
   backend:
@@ -36,14 +48,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      ai-module:
+        condition: service_started
     env_file:
       - .env
     environment:
       # Override hostnames for Docker network
-      PG_HOST:     db
-      CORS_ORIGIN: "*"
+      PG_HOST:        db
+      AI_SERVICE_URL: http://ai-module:8000
+      CORS_ORIGIN:    "*"
     volumes:
-      # Mount Firebase service account key (not committed to Git)
+      # Mount Firebase service account key
       - ./backend/config/serviceAccountKey.json:/app/config/serviceAccountKey.json:ro
     ports:
       - "4000:4000"

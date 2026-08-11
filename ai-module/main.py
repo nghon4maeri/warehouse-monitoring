@@ -1,20 +1,23 @@
 """
-Smart Warehouse — AI Module v4
+Smart Warehouse — AI Module v4 (Optimized Version)
 ===============================
-- POST /predict — classify + statistical anomaly detection (Welford + z-score)
-- GET  /stats   — learned statistics (mean, std, count)
+- POST /predict     — classify + statistical anomaly detection (Welford + z-score)
+- GET  /stats       — learned statistics (mean, std, count)
+- POST /reset-stats — reset learned baseline (for testing)
 """
 
 import logging
+import json
+import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Warehouse AI Module", version="4.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-module")
+
+CACHE_FILE = "stats_cache.json"
 
 # ═══════════════════════
 #  Thresholds
@@ -27,10 +30,11 @@ ZSCORE_THRESHOLD = 2.5
 MIN_SAMPLES      = 20
 
 # ═══════════════════════
-#  Welford's online stats
+#  Welford's online stats with Persistence
 # ═══════════════════════
 class OnlineStats:
-    def __init__(self):
+    def __init__(self, name: str):
+        self.name = name
         self.n    = 0
         self.mean = 0.0
         self.m2   = 0.0
@@ -48,9 +52,57 @@ class OnlineStats:
     def to_dict(self):
         return {"count": self.n, "mean": round(self.mean, 2), "std": round(self.std, 2)}
 
-stats_weight   = OnlineStats()
-stats_dwell    = OnlineStats()
-stats_distance = OnlineStats()
+    # [OPTIMIZED] Khôi phục trạng thái từ dictionary cache
+    def load_dict(self, data: dict):
+        self.n = data.get("count", 0)
+        self.mean = data.get("mean", 0.0)
+        std = data.get("std", 0.0)
+        self.m2 = (std ** 2) * self.n if self.n > 1 else 0.0
+
+    def reset(self):
+        self.n = 0
+        self.mean = 0.0
+        self.m2 = 0.0
+
+stats_weight   = OnlineStats("weight")
+stats_dwell    = OnlineStats("dwell")
+stats_distance = OnlineStats("distance")
+
+# [OPTIMIZED] Tự động Lưu/Đọc cache ra file json
+def save_cache():
+    try:
+        data = {
+            "weight": stats_weight.to_dict(),
+            "dwell": stats_dwell.to_dict(),
+            "distance": stats_distance.to_dict(),
+        }
+        with open(CACHE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.info("[Cache] Statistics saved to stats_cache.json")
+    except Exception as e:
+        logger.error(f"[Cache] Failed to save stats: {e}")
+
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                data = json.load(f)
+                stats_weight.load_dict(data.get("weight", {}))
+                stats_dwell.load_dict(data.get("dwell", {}))
+                stats_distance.load_dict(data.get("distance", {}))
+            logger.info("[Cache] Statistics loaded successfully")
+        except Exception as e:
+            logger.error(f"[Cache] Failed to load stats: {e}")
+
+# [OPTIMIZED] Quản lý vòng đời ứng dụng FastAPI (Lifespan Context)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_cache()
+    yield
+    save_cache()
+
+app = FastAPI(title="Warehouse AI Module", version="4.1.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ═══════════════════════
 #  Schemas
@@ -116,7 +168,7 @@ def detect_anomalies(w: float, d: float, t: float) -> list[str]:
 # ═══════════════════════
 @app.get("/")
 def root():
-    return {"service": "warehouse-ai", "status": "ok", "version": "4.0.0"}
+    return {"service": "warehouse-ai", "status": "ok", "version": "4.1.0"}
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(payload: SensorPayload):
@@ -125,11 +177,13 @@ def predict(payload: SensorPayload):
     category = classify_cargo(w)
     anomalies = detect_anomalies(w, d, t)
 
-    if w > 0 and d >= 0:
+    # [OPTIMIZED] Chỉ cập nhật Welford khi dữ liệu không bị lỗi thô (đảm bảo độ chính xác cho AI)
+    if w > 0 and d >= 0 and not anomalies:
         stats_weight.update(w)
         if t > 0:
             stats_dwell.update(t)
         stats_distance.update(d)
+        save_cache()
 
     if anomalies:
         return PredictResponse(
@@ -149,6 +203,15 @@ def get_stats():
         dwell=stats_dwell.to_dict(),
         distance=stats_distance.to_dict(),
     )
+
+# [OPTIMIZED] Endpoint reset baseline khi cần demo thử nghiệm lại từ đầu
+@app.post("/reset-stats")
+def reset_stats():
+    stats_weight.reset()
+    stats_dwell.reset()
+    stats_distance.reset()
+    save_cache()
+    return {"message": "AI statistics reset successfully"}
 
 if __name__ == "__main__":
     import uvicorn
