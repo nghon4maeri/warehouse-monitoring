@@ -1,54 +1,64 @@
 """
-Smart Warehouse — AI Prediction Module v2
-==========================================
-FastAPI micro-service providing:
-  - POST /predict  — classify cargo & detect anomalies
-
-Uses:
-  - DecisionTreeClassifier (Light / Medium / Heavy)
-  - IsolationForest + rule-based checks (jams, overload, bad readings)
+Smart Warehouse — AI Module v4
+===============================
+- POST /predict — classify + statistical anomaly detection (Welford + z-score)
+- GET  /stats   — learned statistics (mean, std, count)
 """
 
-import os
 import logging
-from typing import Optional
-
-import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
-
-# ──────────────────────────────────────────────
-#  App Initialisation
-# ──────────────────────────────────────────────
-app = FastAPI(
-    title="Warehouse AI Module v2",
-    version="2.0.0",
-    description="ML cargo classification & anomaly detection for IoT warehouse",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Warehouse AI Module", version="4.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-module")
 
-# ──────────────────────────────────────────────
-#  Pydantic Schemas
-# ──────────────────────────────────────────────
+# ═══════════════════════
+#  Thresholds
+# ═══════════════════════
+LIGHT_MAX  = 250
+MEDIUM_MAX = 750
+HEAVY_MAX  = 1200
+
+ZSCORE_THRESHOLD = 2.5
+MIN_SAMPLES      = 20
+
+# ═══════════════════════
+#  Welford's online stats
+# ═══════════════════════
+class OnlineStats:
+    def __init__(self):
+        self.n    = 0
+        self.mean = 0.0
+        self.m2   = 0.0
+
+    def update(self, x: float):
+        self.n += 1
+        delta  = x - self.mean
+        self.mean += delta / self.n
+        self.m2   += delta * (x - self.mean)
+
+    @property
+    def std(self) -> float:
+        return (self.m2 / self.n) ** 0.5 if self.n > 1 else 0.0
+
+    def to_dict(self):
+        return {"count": self.n, "mean": round(self.mean, 2), "std": round(self.std, 2)}
+
+stats_weight   = OnlineStats()
+stats_dwell    = OnlineStats()
+stats_distance = OnlineStats()
+
+# ═══════════════════════
+#  Schemas
+# ═══════════════════════
 class SensorPayload(BaseModel):
     weight_g: float
     distance_cm: float
     dwell_time_sec: float
-
 
 class PredictResponse(BaseModel):
     category: str
@@ -56,154 +66,90 @@ class PredictResponse(BaseModel):
     anomaly_reason: str
     recommended_action: str
 
+class StatsResponse(BaseModel):
+    weight: dict
+    dwell: dict
+    distance: dict
 
-# ──────────────────────────────────────────────
-#  Training Data for DecisionTreeClassifier
-# ──────────────────────────────────────────────
-# Features: [weight_g, dwell_time_sec]
-# Labels:   0=Light, 1=Medium, 2=Heavy
+# ═══════════════════════
+#  Logic
+# ═══════════════════════
 
-def _build_training_data():
-    X, y = [], []
+def classify_cargo(w: float) -> str:
+    if w <= 0:        return "None"
+    if w < LIGHT_MAX:  return "Light"
+    if w < MEDIUM_MAX: return "Medium"
+    return "Heavy"
 
-    # Light:   0–250g
-    for _ in range(40):
-        w = np.random.uniform(0, 249)
-        d = np.random.uniform(0.5, 3.0)
-        X.append([w, d])
-        y.append(0)
+def detect_anomalies(w: float, d: float, t: float) -> list[str]:
+    reasons = []
 
-    # Medium:  250–750g
-    for _ in range(40):
-        w = np.random.uniform(250, 749)
-        d = np.random.uniform(1.0, 5.0)
-        X.append([w, d])
-        y.append(1)
+    if d < 0:
+        reasons.append(f"SENSOR FAULT — no echo")
+    if w < 0:
+        reasons.append(f"SENSOR FAULT — negative weight ({w:.0f}g)")
+    if w > HEAVY_MAX:
+        reasons.append(f"OVERLOAD — {w:.0f}g > {HEAVY_MAX}g capacity")
 
-    # Heavy:   750–1200g
-    for _ in range(40):
-        w = np.random.uniform(750, 1200)
-        d = np.random.uniform(2.0, 7.0)
-        X.append([w, d])
-        y.append(2)
+    if stats_weight.n < MIN_SAMPLES or w <= 0 or d < 0:
+        return reasons
 
-    return np.array(X), np.array(y)
+    if stats_weight.std > 0:
+        z = (w - stats_weight.mean) / stats_weight.std
+        if abs(z) > ZSCORE_THRESHOLD:
+            reasons.append(f"Weight anomaly: {w:.0f}g (z={z:+.1f}σ, normal ~{stats_weight.mean:.0f}±{stats_weight.std:.0f}g)")
 
+    if stats_dwell.std > 0 and t > 0:
+        z = (t - stats_dwell.mean) / stats_dwell.std
+        if abs(z) > ZSCORE_THRESHOLD:
+            reasons.append(f"Dwell anomaly: {t:.1f}s (z={z:+.1f}σ, normal ~{stats_dwell.mean:.1f}±{stats_dwell.std:.1f}s)")
 
-X_train, y_train = _build_training_data()
+    if stats_distance.std > 0 and d > 0:
+        z = (d - stats_distance.mean) / stats_distance.std
+        if abs(z) > ZSCORE_THRESHOLD:
+            reasons.append(f"Distance anomaly: {d:.1f}cm (z={z:+.1f}σ)")
 
-# ── Decision Tree Classifier ──
-_clf = DecisionTreeClassifier(max_depth=4, random_state=42)
-_clf.fit(X_train, y_train)
+    return reasons
 
-# ── Isolation Forest for anomaly detection ──
-_anomaly_model = IsolationForest(
-    n_estimators=100,
-    contamination=0.05,
-    random_state=42,
-).fit(X_train)
-
-# ── Scaler for isolation forest input ──
-_scaler = StandardScaler().fit(X_train)
-
-CATEGORY_MAP = {0: "Light", 1: "Medium", 2: "Heavy"}
-
-
-# ──────────────────────────────────────────────
+# ═══════════════════════
 #  Endpoints
-# ──────────────────────────────────────────────
-
+# ═══════════════════════
 @app.get("/")
 def root():
-    return {"service": "warehouse-ai", "status": "ok", "version": "2.0.0"}
-
+    return {"service": "warehouse-ai", "status": "ok", "version": "4.0.0"}
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(payload: SensorPayload):
-    """
-    Classify cargo and detect anomalies.
+    w, d, t = payload.weight_g, payload.distance_cm, payload.dwell_time_sec
 
-    Input:
-      - weight_g: measured weight of the cargo
-      - distance_cm: ultrasonic distance reading
-      - dwell_time_sec: time the object has been in the station zone
+    category = classify_cargo(w)
+    anomalies = detect_anomalies(w, d, t)
 
-    Returns:
-      - category: "Light", "Medium", or "Heavy"
-      - is_anomaly: whether an anomaly is detected
-      - anomaly_reason: explanation if anomaly detected
-      - recommended_action: TRIGGER_ALARM or SORT_<CATEGORY>
-    """
-    w = payload.weight_g
-    d = payload.distance_cm
-    t = payload.dwell_time_sec
+    if w > 0 and d >= 0:
+        stats_weight.update(w)
+        if t > 0:
+            stats_dwell.update(t)
+        stats_distance.update(d)
 
-    logger.info(f"Predict request — weight={w:.1f}g, dist={d:.1f}cm, dwell={t:.1f}s")
-
-    # ── Step 1: Rule-based anomaly checks ──
-    anomaly_reasons = []
-
-    # Jam detection: object stayed > 7 seconds
-    if t > 7.0:
-        anomaly_reasons.append(f"JAM DETECTED: object stalled for {t:.1f}s")
-
-    # Overload detection: weight exceeds 1200g
-    if w > 1200.0:
-        anomaly_reasons.append(f"OVERLOAD: weight {w:.1f}g exceeds 1200g limit")
-
-    # Sensor fault: impossible distance or negative weight
-    if d < 0 or w < 0:
-        anomaly_reasons.append(f"SENSOR FAULT: distance={d:.1f}cm, weight={w:.1f}g")
-
-    # ── Step 2: ML anomaly detection (Isolation Forest) ──
-    try:
-        features = np.array([[w, t]])
-        scaled = _scaler.transform(features)
-        ml_label = _anomaly_model.predict(scaled)[0]
-        if ml_label == -1:
-            anomaly_reasons.append("ML anomaly detected — unusual weight/dwell pattern")
-    except Exception as exc:
-        logger.error(f"IsolationForest error: {exc}")
-
-    # ── Step 3: Determine category ──
-    try:
-        cat_idx = _clf.predict(np.array([[w, t]]))[0]
-        category = CATEGORY_MAP.get(int(cat_idx), "Unknown")
-    except Exception:
-        # Fallback: rule-based classification
-        if w < 250:
-            category = "Light"
-        elif w < 750:
-            category = "Medium"
-        else:
-            category = "Heavy"
-
-    # ── Step 4: Build response ──
-    is_anomaly = len(anomaly_reasons) > 0
-
-    if is_anomaly:
-        anomaly_reason = "; ".join(anomaly_reasons)
-        recommended_action = "TRIGGER_ALARM"
-    else:
-        anomaly_reason = ""
-        recommended_action = f"SORT_{category.upper()}"
-
-    logger.info(
-        f"Prediction → category={category}, anomaly={is_anomaly}, "
-        f"action={recommended_action}"
-    )
-
+    if anomalies:
+        return PredictResponse(
+            category=category, is_anomaly=True,
+            anomaly_reason="; ".join(anomalies),
+            recommended_action="INSPECT_STATION",
+        )
     return PredictResponse(
-        category=category,
-        is_anomaly=is_anomaly,
-        anomaly_reason=anomaly_reason,
-        recommended_action=recommended_action,
+        category=category, is_anomaly=False,
+        anomaly_reason="", recommended_action=f"SORT_{category.upper()}",
     )
 
+@app.get("/stats", response_model=StatsResponse)
+def get_stats():
+    return StatsResponse(
+        weight=stats_weight.to_dict(),
+        dwell=stats_dwell.to_dict(),
+        distance=stats_distance.to_dict(),
+    )
 
-# ──────────────────────────────────────────────
-#  Entry Point
-# ──────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

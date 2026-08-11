@@ -1,10 +1,8 @@
 /**
  * AI Prediction Service
  * ======================
- * Phụ trách: Trần Hoàng Minh Khang
- *
- * Gọi API Python FastAPI (/predict) để phân loại hàng hóa
- * và phát hiện bất thường (kẹt hàng, quá tải).
+ * - POST /predict — classify + anomaly detection
+ * - GET  /stats   — learned statistics
  */
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
@@ -27,4 +25,10 @@ async function predictCargo(sensorPayload) {
   return response.json();
 }
 
-module.exports = { predictCargo };
+async function getStats() {
+  const response = await fetch(`${AI_SERVICE_URL}/stats`);
+  if (!response.ok) throw new Error(`Stats failed with ${response.status}`);
+  return response.json();
+}
+
+module.exports = { predictCargo, getStats };

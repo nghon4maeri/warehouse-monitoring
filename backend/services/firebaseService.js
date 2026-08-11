@@ -22,7 +22,7 @@ function saveSensorReading(payload) {
     weight_g:      payload.weight_g ?? null,
     dwell_time_sec: payload.dwell_time_sec ?? 0,
     timestamp,
-  });
+  }).catch(err => console.error('[Firebase] Save error:', err.message));
 }
 
 async function getHistory(limit = 50) {

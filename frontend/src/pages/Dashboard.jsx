@@ -1,70 +1,118 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
-import {
-  Activity,
-  AlertTriangle,
-  Clock,
-  DoorOpen,
-  DoorClosed,
-  Gauge,
-  LogOut,
-  PowerOff,
-  RefreshCw,
-  Scale,
-} from 'lucide-react';
+import { AlertTriangle, Activity, LogOut, ShieldAlert, DoorOpen, DoorClosed, Bell, BellOff } from 'lucide-react';
 import { clearToken } from '../components/ProtectedRoute';
 import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 
-/* ───── Constants ───── */
 const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const MAX_DATA_POINTS = 30;
 
-/* ───── Helper: format timestamp for x-axis ───── */
 const formatTime = (iso) => {
   const d = new Date(iso);
   return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
 
-/* ───── Dashboard Component ───── */
+/* ========== Gauge Component ========== */
+function Gauge({ value, max, label, unit, color }) {
+  const pct = Math.min(Math.max((value || 0) / max, 0), 1);
+  const circumference = 2 * Math.PI * 38;
+  const filled = pct * circumference * 0.5;
+
+  return (
+    <div className="flex flex-col items-center">
+      <svg viewBox="0 0 100 70" className="w-32 h-24">
+        {/* Background half-circle */}
+        <path d="M12 55 A38 38 0 0 1 88 55" fill="none" stroke="#334155" strokeWidth="6" strokeLinecap="round" />
+        {/* Foreground filled arc */}
+        <path
+          d="M12 55 A38 38 0 0 1 88 55"
+          fill="none"
+          stroke={color}
+          strokeWidth="6"
+          strokeLinecap="round"
+          strokeDasharray={`${filled} ${circumference}`}
+          style={{ transition: 'stroke-dasharray 0.5s ease' }}
+        />
+        {/* Value text */}
+        <text x="50" y="66" textAnchor="middle" fill="#94a3b8" fontSize="10">{value ?? '--'} {unit}</text>
+      </svg>
+      <span className="text-xs text-gray-500 mt-0.5">{label}</span>
+    </div>
+  );
+}
+
+/* ========== Main Dashboard ========== */
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
 
-  // Latest sensor snapshot
-  const [latest, setLatest] = useState({
-    distance_cm: '--',
-    weight_g: '--',
-    dwell_time_sec: '--',
-    timestamp: null,
-  });
-
-  // Time-series arrays for charts
+  const [latest, setLatest] = useState({ distance_cm: 0, weight_g: 0, dwell_time_sec: 0, timestamp: null });
   const [distanceSeries, setDistanceSeries] = useState([]);
   const [weightSeries, setWeightSeries] = useState([]);
-  const [alertMessage, setAlertMessage] = useState(null);
-  const [gateOpen, setGateOpen] = useState(false);
+  const [history, setHistory] = useState([]);
 
-  // AI classification / anomaly state
   const [aiCategory, setAiCategory] = useState(null);
   const [isAnomaly, setIsAnomaly] = useState(false);
   const [anomalyReason, setAnomalyReason] = useState('');
   const [recommendedAction, setRecommendedAction] = useState('');
+  const [stats, setStats] = useState({ total: 0, anomalies: 0 });
+  const [categoryCounts, setCategoryCounts] = useState({ Light: 0, Medium: 0, Heavy: 0, Anomaly: 0 });
+  const [gateOpen, setGateOpen] = useState(false);
+  const [alarmOn, setAlarmOn] = useState(false);
+  const socketRef = useRef(null);
 
-  // Connection status ref (avoids stale closure)
   const connectedRef = useRef(false);
+  const historyLoadedRef = useRef(false);
 
-  /* ───── Socket.io lifecycle ───── */
+  const classifyWeight = (w) => {
+    if (w == null || w <= 0) return 'Anomaly';
+    if (w < 250) return 'Light';
+    if (w < 750) return 'Medium';
+    return 'Heavy';
+  };
+
+  const fetchHistory = async () => {
+    try {
+      const res = await fetch('/api/history');
+      const data = await res.json();
+      const items = [];
+      for (const [deviceId, entries] of Object.entries(data)) {
+        for (const [ts, entry] of Object.entries(entries)) {
+          items.push({ deviceId, ...entry, _key: ts });
+        }
+      }
+      items.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+      setHistory(items.slice(0, 20));
+
+      if (!historyLoadedRef.current && items.length > 0) {
+        historyLoadedRef.current = true;
+        const sorted = [...items].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+        const recent = sorted.slice(-MAX_DATA_POINTS);
+
+        setDistanceSeries(recent.map((r) => ({
+          time: formatTime(r.timestamp),
+          distance: r.distance_cm ?? 0,
+        })));
+
+        setWeightSeries(recent.map((r) => ({
+          time: formatTime(r.timestamp),
+          weight: r.weight_g ?? 0,
+        })));
+
+        const counts = { Light: 0, Medium: 0, Heavy: 0, Anomaly: 0 };
+        for (const r of sorted) {
+          const cat = classifyWeight(r.weight_g);
+          counts[cat] = (counts[cat] || 0) + 1;
+        }
+        setCategoryCounts(counts);
+        setStats((prev) => ({ ...prev, total: sorted.length }));
+      }
+    } catch (_) {}
+  };
+
   useEffect(() => {
     const sock = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
@@ -75,7 +123,8 @@ export default function Dashboard() {
     sock.on('connect', () => {
       setConnected(true);
       connectedRef.current = true;
-      console.log('[Socket] Connected:', sock.id);
+      socketRef.current = sock;
+      fetchHistory();
       sock.emit('request-history', 50);
     });
 
@@ -86,14 +135,13 @@ export default function Dashboard() {
 
     sock.on('sensor-data', (payload) => {
       setLatest({
-        distance_cm: payload.distance_cm ?? '--',
-        weight_g: payload.weight_g ?? '--',
-        dwell_time_sec: payload.dwell_time_sec ?? '--',
+        distance_cm: payload.distance_cm ?? 0,
+        weight_g: payload.weight_g ?? 0,
+        dwell_time_sec: payload.dwell_time_sec ?? 0,
         timestamp: payload.timestamp || new Date().toISOString(),
       });
 
-      const now = payload.timestamp || new Date().toISOString();
-      const t = formatTime(now);
+      const t = formatTime(payload.timestamp || new Date().toISOString());
 
       setDistanceSeries((prev) => {
         const next = [...prev, { time: t, distance: payload.distance_cm ?? 0 }];
@@ -104,342 +152,174 @@ export default function Dashboard() {
         const next = [...prev, { time: t, weight: payload.weight_g ?? 0 }];
         return next.length > MAX_DATA_POINTS ? next.slice(-MAX_DATA_POINTS) : next;
       });
+
+      setStats((prev) => ({ ...prev, total: prev.total + 1 }));
     });
 
     sock.on('sensor-ai-update', (payload) => {
-      // Update AI classification
       setAiCategory(payload.category || null);
       setIsAnomaly(!!payload.is_anomaly);
       setAnomalyReason(payload.anomaly_reason || '');
       setRecommendedAction(payload.recommended_action || '');
-
-      // Also update latest sensor snapshot
-      setLatest({
-        distance_cm: payload.distance_cm ?? '--',
-        weight_g: payload.weight_g ?? '--',
-        dwell_time_sec: payload.dwell_time_sec ?? '--',
-        timestamp: payload.timestamp || new Date().toISOString(),
-      });
+      if (payload.is_anomaly) {
+        setStats((prev) => ({ ...prev, anomalies: prev.anomalies + 1 }));
+        setCategoryCounts((prev) => ({ ...prev, Anomaly: prev.Anomaly + 1 }));
+      } else if (payload.category) {
+        setCategoryCounts((prev) => ({ ...prev, [payload.category]: (prev[payload.category] || 0) + 1 }));
+      }
     });
-
-    setSocket(sock);
 
     return () => {
       sock.disconnect();
     };
   }, []);
 
-  /* ───── Alert system ───── */
-  useEffect(() => {
-    const dist = parseFloat(latest.distance_cm);
-    if (!isNaN(dist) && dist < 10) {
-      setAlertMessage('Obstacle too close — possible collision risk!');
-    } else if (!isNaN(dist) && dist < 30) {
-      setAlertMessage('Proximity warning — object approaching.');
-    } else {
-      setAlertMessage(null);
-    }
-  }, [latest.distance_cm]);
-
-  /* ───── Actuator Commands ───── */
-  const sendCommand = useCallback(
-    (command, extra = {}) => {
-      if (!socket || !connectedRef.current) {
-        console.warn('Socket not connected');
-        return;
-      }
-      socket.emit('actuator-command', { command, ...extra });
-    },
-    [socket],
-  );
-
-  const handleEmergencyStop = () => {
-    socket?.emit('emergency-stop');
-    setAlertMessage('EMERGENCY STOP issued!');
-    setTimeout(() => setAlertMessage(null), 5000);
-  };
-
-  const handleGateToggle = () => {
-    const action = gateOpen ? 'close' : 'open';
-    socket?.emit('gate-trigger', action);
-    setGateOpen(!gateOpen);
-  };
-
   const handleLogout = () => {
     clearToken();
     navigate('/login', { replace: true });
   };
 
-  /* ───── Render ───── */
   return (
-    <div className="min-h-screen bg-gray-950 p-4 md:p-6 space-y-6">
-      {/* ── Header ── */}
-      <header className="flex flex-wrap items-center justify-between gap-4">
+    <div className="min-h-screen bg-gray-950 p-3 md:p-4 space-y-3">
+      {/* Header */}
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
-            Smart Warehouse Monitor
-          </h1>
-          <p className="text-gray-400 text-sm">IoT Dashboard — Real-time Sensor Tracking</p>
+          <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">Smart Warehouse Monitor</h1>
+          <p className="text-gray-400 text-xs">IoT Dashboard — Real-time Sensor Tracking</p>
         </div>
         <div className="flex items-center gap-3">
-          <span
-            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full
-              ${connected ? 'bg-green-900/40 text-green-400 border border-green-700' : 'bg-red-900/40 text-red-400 border border-red-700'}`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}
-            />
+          <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full
+            ${connected ? 'bg-green-900/40 text-green-400 border border-green-700' : 'bg-red-900/40 text-red-400 border border-red-700'}`}>
+            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
             {connected ? 'Live' : 'Offline'}
           </span>
-          {latest.timestamp && (
-            <span className="text-xs text-gray-500">
-              Updated: {formatTime(latest.timestamp)}
-            </span>
-          )}
-          <button
-            onClick={handleLogout}
+          {latest.timestamp && <span className="text-xs text-gray-500">{formatTime(latest.timestamp)}</span>}
+          <button onClick={handleLogout}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg
-              bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white border border-gray-700
-              transition-colors"
-            title="Logout"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Logout
+              bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white border border-gray-700 transition-colors">
+            <LogOut className="w-3.5 h-3.5" /> Logout
           </button>
         </div>
       </header>
 
-      {/* ── AI Anomaly Banner (flashing red) ── */}
+      {/* Anomaly Banner */}
       {isAnomaly && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-lg border text-sm font-medium
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium
           bg-red-950/50 border-red-500 text-red-300 animate-pulse">
-          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-          <div className="flex flex-col gap-0.5">
-            <span className="font-bold">ANOMALY DETECTED</span>
-            <span className="text-red-400 text-xs">{anomalyReason}</span>
-            <span className="text-red-500 text-xs">Action: {recommendedAction}</span>
-          </div>
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span className="font-bold">ANOMALY:</span> {anomalyReason}
+          <span className="text-red-500">→ {recommendedAction}</span>
         </div>
       )}
 
-      {/* ── Alert Banner ── */}
-      {alertMessage && (
-        <div
-          className={`flex items-center gap-3 px-4 py-3 rounded-lg border text-sm font-medium
-            ${alertMessage.includes('EMERGENCY') ? 'bg-red-950/40 border-red-500 text-red-300' : 'bg-amber-950/30 border-amber-600 text-amber-300'}`}
-        >
-          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-          {alertMessage}
+      {/* Actuator Control Panel */}
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+        <h3 className="text-xs font-semibold text-gray-400 mb-3 flex items-center gap-2">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" /> Actuator Controls
+        </h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => { socketRef.current?.emit('gate-trigger', 'open'); setGateOpen(true); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${gateOpen ? 'bg-emerald-900/40 text-emerald-400 border-emerald-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <DoorOpen className="w-3.5 h-3.5" /> Open Gate
+          </button>
+          <button
+            onClick={() => { socketRef.current?.emit('gate-trigger', 'close'); setGateOpen(false); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${!gateOpen ? 'bg-orange-900/40 text-orange-400 border-orange-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <DoorClosed className="w-3.5 h-3.5" /> Close Gate
+          </button>
+          <span className="text-gray-600 mx-1">|</span>
+          <button
+            onClick={() => { socketRef.current?.emit('alarm-toggle', true); setAlarmOn(true); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${alarmOn ? 'bg-red-900/40 text-red-400 border-red-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <Bell className="w-3.5 h-3.5" /> Alarm On
+          </button>
+          <button
+            onClick={() => { socketRef.current?.emit('alarm-toggle', false); setAlarmOn(false); }}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors
+              ${!alarmOn ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700'}`}>
+            <BellOff className="w-3.5 h-3.5" /> Alarm Off
+          </button>
+          <span className="text-gray-600 mx-1">|</span>
+          <button
+            onClick={() => { socketRef.current?.emit('emergency-stop'); setGateOpen(false); setAlarmOn(true); }}
+            className="inline-flex items-center gap-1.5 text-xs font-bold px-4 py-2 rounded-lg border
+              bg-red-700 hover:bg-red-600 text-white border-red-500 transition-colors animate-pulse">
+            <ShieldAlert className="w-3.5 h-3.5" /> EMERGENCY STOP
+          </button>
         </div>
-      )}
-
-      {/* ── Sensor Cards ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <SensorCard
-          icon={<Gauge className="w-5 h-5" />}
-          label="Distance"
-          value={`${latest.distance_cm} cm`}
-          color="text-cyan-400"
-          bg="bg-cyan-950/30 border-cyan-700"
-        />
-        <SensorCard
-          icon={<Scale className="w-5 h-5" />}
-          label="Weight"
-          value={latest.weight_g !== '--' ? `${latest.weight_g} g` : '-- g'}
-          color="text-emerald-400"
-          bg="bg-emerald-950/30 border-emerald-700"
-        />
-        <SensorCard
-          icon={<Clock className="w-5 h-5" />}
-          label="Dwell Time"
-          value={latest.dwell_time_sec !== '--' ? `${latest.dwell_time_sec} s` : '-- s'}
-          color="text-violet-400"
-          bg="bg-violet-950/30 border-violet-700"
-        />
-        <SensorCard
-          icon={<Activity className="w-5 h-5" />}
-          label="AI Classification"
-          value={aiCategory || '--'}
-          color={isAnomaly ? 'text-red-400' : 'text-yellow-400'}
-          bg={isAnomaly ? 'bg-red-950/40 border-red-700' : 'bg-yellow-950/30 border-yellow-700'}
-        />
+        <div className="flex gap-4 mt-2 text-xs text-gray-500">
+          <span>Gate: <span className={gateOpen ? 'text-emerald-400' : 'text-orange-400'}>{gateOpen ? 'OPEN' : 'CLOSED'}</span></span>
+          <span>Alarm: <span className={alarmOn ? 'text-red-400' : 'text-slate-400'}>{alarmOn ? 'ACTIVE' : 'OFF'}</span></span>
+        </div>
       </div>
 
-      {/* ── Control Buttons ── */}
-      <div className="flex flex-wrap gap-3">
-        <button
-          onClick={handleEmergencyStop}
-          className="inline-flex items-center gap-2 px-6 py-2.5 bg-red-600 hover:bg-red-500 text-white
-            font-semibold rounded-lg transition-colors text-sm shadow-lg shadow-red-900/30"
-        >
-          <PowerOff className="w-4 h-4" />
-          Emergency Stop
-        </button>
-
-        <button
-          onClick={handleGateToggle}
-          className={`inline-flex items-center gap-2 px-6 py-2.5 font-semibold rounded-lg transition-colors text-sm
-            ${gateOpen
-              ? 'bg-amber-600 hover:bg-amber-500 text-white'
-              : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}
-        >
-          {gateOpen ? <DoorClosed className="w-4 h-4" /> : <DoorOpen className="w-4 h-4" />}
-          {gateOpen ? 'Close Gate' : 'Open Gate'}
-        </button>
-
-        <button
-          onClick={() => {
-            // Request actuator command via REST fallback
-            fetch('/api/actuators', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ command: 'refresh_status' }),
-            }).catch(console.error);
-          }}
-          className="inline-flex items-center gap-2 px-6 py-2.5 bg-gray-700 hover:bg-gray-600 text-white
-            font-semibold rounded-lg transition-colors text-sm"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Refresh Status
-        </button>
+      {/* Gauges + Sensor Cards */}
+      <div className="grid grid-cols-3 lg:grid-cols-5 gap-3">
+        <Gauge value={latest.distance_cm} max={100} label="Distance" unit="cm" color="#22d3ee" />
+        <Gauge value={latest.weight_g} max={1200} label="Weight" unit="g" color="#34d399" />
+        <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 flex flex-col items-center justify-center">
+          <span className="text-2xl font-bold text-violet-400">{latest.dwell_time_sec}s</span>
+          <span className="text-xs text-gray-500 mt-1">Dwell Time</span>
+        </div>
+        <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 flex flex-col items-center justify-center">
+          <span className={`text-2xl font-bold ${isAnomaly ? 'text-red-400' : 'text-yellow-400'}`}>
+            {aiCategory || '--'}
+          </span>
+          <span className="text-xs text-gray-500 mt-1">AI Classify</span>
+        </div>
+        <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 flex flex-col items-center justify-center">
+          <span className="text-2xl font-bold text-emerald-400">{stats.total}</span>
+          <span className="text-xs text-gray-500 mt-1">Readings</span>
+        </div>
       </div>
 
-      {/* ── Charts ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Distance Line Chart */}
-        <ChartCard title="Distance Over Time (cm)">
-          <ResponsiveContainer width="100%" height={260}>
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+          <h3 className="text-xs font-semibold text-gray-400 mb-2">Distance Over Time</h3>
+          <ResponsiveContainer width="100%" height={180}>
             <LineChart data={distanceSeries}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis
-                dataKey="time"
-                stroke="#94a3b8"
-                fontSize={11}
-                tick={{ fill: '#94a3b8' }}
-                angle={-30}
-                textAnchor="end"
-                height={60}
-              />
-              <YAxis stroke="#94a3b8" fontSize={11} tick={{ fill: '#94a3b8' }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#1e293b',
-                  border: '1px solid #475569',
-                  borderRadius: '8px',
-                  color: '#f1f5f9',
-                }}
-              />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="distance"
-                stroke="#22d3ee"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 5 }}
-                name="Distance (cm)"
-              />
+              <XAxis dataKey="time" stroke="#94a3b8" fontSize={9} tick={{ fill: '#94a3b8' }} angle={-30} textAnchor="end" height={40} />
+              <YAxis stroke="#94a3b8" fontSize={9} tick={{ fill: '#94a3b8' }} />
+              <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: '6px', color: '#f1f5f9', fontSize: '12px' }} />
+              <Line type="monotone" dataKey="distance" stroke="#22d3ee" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
-        </ChartCard>
+        </div>
 
-        {/* Weight Line Chart */}
-        <ChartCard title="Weight Over Time (g)">
-          <ResponsiveContainer width="100%" height={260}>
+        <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+          <h3 className="text-xs font-semibold text-gray-400 mb-2">Weight Over Time</h3>
+          <ResponsiveContainer width="100%" height={180}>
             <LineChart data={weightSeries}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis
-                dataKey="time"
-                stroke="#94a3b8"
-                fontSize={11}
-                tick={{ fill: '#94a3b8' }}
-                angle={-30}
-                textAnchor="end"
-                height={60}
-              />
-              <YAxis stroke="#94a3b8" fontSize={11} tick={{ fill: '#94a3b8' }} />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#1e293b',
-                  border: '1px solid #475569',
-                  borderRadius: '8px',
-                  color: '#f1f5f9',
-                }}
-              />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="weight"
-                stroke="#34d399"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 5 }}
-                name="Weight (g)"
-              />
+              <XAxis dataKey="time" stroke="#94a3b8" fontSize={9} tick={{ fill: '#94a3b8' }} angle={-30} textAnchor="end" height={40} />
+              <YAxis stroke="#94a3b8" fontSize={9} tick={{ fill: '#94a3b8' }} />
+              <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: '6px', color: '#f1f5f9', fontSize: '12px' }} />
+              <Line type="monotone" dataKey="weight" stroke="#34d399" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
-        </ChartCard>
-
-        {/* System Health Card */}
-        <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 flex flex-col justify-center">
-          <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
-            <Activity className="w-4 h-4 text-emerald-400" />
-            System Health
-          </h3>
-          <div className="space-y-3 text-sm">
-            <StatusRow label="MQTT Broker" ok />
-            <StatusRow label="PostgreSQL" ok />
-            <StatusRow label="Firebase RTDB" ok />
-            <StatusRow label="AI Service" ok />
-            <StatusRow
-              label={`Gate ${gateOpen ? 'OPEN' : 'CLOSED'}`}
-              ok={!gateOpen}
-              warn={gateOpen}
-            />
-          </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-/* ───── Sub-components ───── */
-
-function SensorCard({ icon, label, value, color = 'text-white', bg = 'bg-gray-900 border-gray-700' }) {
-  return (
-    <div className={`rounded-xl border p-4 ${bg} transition-all hover:brightness-110`}>
-      <div className="flex items-center gap-2 mb-2 text-gray-400 text-xs font-medium uppercase tracking-wider">
-        {icon}
-        {label}
+      {/* Classification Distribution Bar Chart */}
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+        <h3 className="text-xs font-semibold text-gray-400 mb-2">Classification Distribution</h3>
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={Object.entries(categoryCounts).map(([name, count]) => ({ name, count }))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+            <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} tick={{ fill: '#94a3b8' }} />
+            <YAxis stroke="#94a3b8" fontSize={10} tick={{ fill: '#94a3b8' }} allowDecimals={false} />
+            <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', borderRadius: '6px', color: '#f1f5f9', fontSize: '12px' }} />
+            <Bar dataKey="count" fill="#22d3ee" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
       </div>
-      <p className={`text-xl font-bold ${color}`}>{value}</p>
-    </div>
-  );
-}
 
-function ChartCard({ title, children }) {
-  return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
-      <h3 className="text-sm font-semibold text-gray-300 mb-3">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-function StatusRow({ label, ok, warn }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-gray-400">{label}</span>
-      <span
-        className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full
-          ${ok ? 'bg-green-900/30 text-green-400' : ''}
-          ${warn && !ok ? 'bg-amber-900/30 text-amber-400' : ''}`}
-      >
-        <span
-          className={`w-1.5 h-1.5 rounded-full ${ok ? 'bg-green-400' : 'bg-red-400'}`}
-        />
-        {ok ? (warn ? 'WARN' : 'OK') : 'DOWN'}
-      </span>
     </div>
   );
 }
