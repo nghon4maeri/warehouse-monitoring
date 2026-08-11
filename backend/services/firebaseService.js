@@ -27,8 +27,13 @@ function saveSensorReading(payload) {
 
 async function getHistory(limit = 50) {
   if (!firebaseDb) return {};
-  const snapshot = await firebaseDb.ref('sensors').limitToLast(limit).once('value');
-  return snapshot.val() || {};
+  try {
+    const snapshot = await firebaseDb.ref('sensors').limitToLast(limit).once('value');
+    return snapshot.val() || {};
+  } catch (err) {
+    console.error('[Firebase] Get history error:', err.message);
+    return {};
+  }
 }
 
 module.exports = { saveSensorReading, getHistory };

@@ -1,5 +1,5 @@
 /**
- * Smart Warehouse — Backend API Server (Modularised)
+ * Smart Warehouse — Backend API Server (Optimized Version)
  * ====================================================
  * Main orchestrator: Express + Socket.io + MQTT + Auth.
  *
@@ -79,10 +79,15 @@ app.post('/api/report/send', async (_req, res) => {
   }
 });
 
-/* ───── PostgreSQL check ───── */
+/* ───── PostgreSQL check & Error listener ───── */
 pool.query('SELECT NOW()')
   .then(({ rows }) => console.log('[PG] Connected — server time:', rows[0].now))
   .catch(err => console.error('[PG] Connection failed:', err.message));
+
+// [OPTIMIZED] Bắt lỗi ngầm từ Postgres Pool để tránh crash app
+pool.on('error', (err) => {
+  console.error('[PG Pool Error] Unexpected idle client error:', err.message);
+});
 
 /* ───── MQTT + Sensor Pipeline ───── */
 initMQTT();
@@ -93,9 +98,14 @@ onSensorData(handleSensorData);
 io.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);
 
+  // [OPTIMIZED] Bọc try-catch cho các socket handler chống crash
   socket.on('request-history', async (limit = 50) => {
-    const data = await getHistory(limit);
-    socket.emit('history-data', data);
+    try {
+      const data = await getHistory(limit);
+      socket.emit('history-data', data);
+    } catch (err) {
+      console.error('[Socket] History fetch error:', err.message);
+    }
   });
 
   socket.on('actuator-command', ({ command, ...extra }) => {
@@ -121,9 +131,42 @@ io.on('connection', (socket) => {
   });
 });
 
+/* ───── Express Global Error Handler ───── */
+// [OPTIMIZED] Middleware xử lý lỗi tập trung cho Express
+app.use((err, _req, res, _next) => {
+  console.error('[Express Global Error]:', err.stack);
+  res.status(500).json({ error: 'Internal Server Error', message: err.message });
+});
+
 /* ───── Start ───── */
 startScheduledReports();
 startChatbot();
 server.listen(PORT, () => {
   console.log(`[Server] Warehouse backend listening on http://localhost:${PORT}`);
 });
+
+/* ───── [OPTIMIZED] Graceful Shutdown ───── */
+const handleShutdown = (signal) => {
+  console.log(`\n[Server] Received ${signal}. Closing HTTP server & Database connections...`);
+
+  server.close(async () => {
+    console.log('[Server] HTTP and Socket.io server closed.');
+    try {
+      await pool.end();
+      console.log('[PG] PostgreSQL pool closed cleanly.');
+      process.exit(0);
+    } catch (err) {
+      console.error('[PG] Error closing pool:', err.message);
+      process.exit(1);
+    }
+  });
+
+  // Ép buộc thoát nếu quá 10 giây
+  setTimeout(() => {
+    console.error('[Server] Forced shutdown execution due to timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('SIGINT',  () => handleShutdown('SIGINT'));

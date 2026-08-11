@@ -2,12 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Activity, LogOut, ShieldAlert, DoorOpen, DoorClosed, Bell, BellOff } from 'lucide-react';
-import { clearToken } from '../components/ProtectedRoute';
+import { clearToken, getToken } from '../components/ProtectedRoute';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const MAX_DATA_POINTS = 30;
 
 const formatTime = (iso) => {
@@ -52,7 +52,7 @@ export default function Dashboard() {
   const [latest, setLatest] = useState({ distance_cm: 0, weight_g: 0, dwell_time_sec: 0, timestamp: null });
   const [distanceSeries, setDistanceSeries] = useState([]);
   const [weightSeries, setWeightSeries] = useState([]);
-  const [history, setHistory] = useState([]);
+  const [, setHistory] = useState([]);
 
   const [aiCategory, setAiCategory] = useState(null);
   const [isAnomaly, setIsAnomaly] = useState(false);
@@ -76,7 +76,16 @@ export default function Dashboard() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch('/api/history');
+      const token = getToken();
+      const res = await fetch(`${API_BASE_URL}/api/history`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      if (!res.ok) return;
+
       const data = await res.json();
       const items = [];
       for (const [deviceId, entries] of Object.entries(data)) {
@@ -110,11 +119,13 @@ export default function Dashboard() {
         setCategoryCounts(counts);
         setStats((prev) => ({ ...prev, total: sorted.length }));
       }
-    } catch (_) {}
+    } catch (err) {
+      console.error('[Dashboard] Fetch history error:', err.message);
+    }
   };
 
   useEffect(() => {
-    const sock = io(SOCKET_URL, {
+    const sock = io(API_BASE_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 2000,

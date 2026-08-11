@@ -1,5 +1,5 @@
 // ============================================================
-// Smart Warehouse — ESP32 Firmware
+// Smart Warehouse — ESP32 Firmware (Optimized Version)
 // Nguyễn Hồ Nam / Trần Hoàng Minh Khang / Đàng Thế Tony
 // ============================================================
 
@@ -46,9 +46,20 @@ bool  calibrated  = false;
 /* ========== Buzzer ========== */
 bool alarmActive = false;
 
-/* ========== Timer ========== */
+/* ========== Timer & Reconnect ========== */
 unsigned long lastSensorRead = 0;
 const unsigned long SENSOR_INTERVAL = 3000;
+unsigned long lastMqttRetry  = 0; // [OPTIMIZED] Timer hỗ trợ reconnect non-blocking
+
+/* ========== [OPTIMIZED] EMA Filter Parameters ========== */
+float emaDistance = 0.0f;
+float emaWeight   = 0.0f;
+const float EMA_ALPHA = 0.35f; // Hệ số làm mượt tín hiệu (0.1 - 0.5)
+
+float applyEMA(float currentVal, float prevFiltered) {
+  if (prevFiltered <= 0.0f) return currentVal;
+  return (EMA_ALPHA * currentVal) + ((1.0f - EMA_ALPHA) * prevFiltered);
+}
 
 /* ============================================================
  *  SETUP
@@ -74,16 +85,16 @@ void setup() {
   connectWiFi();
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
-  connectMQTT();
 
-  Serial.println("[READY]\n");
+  Serial.println("[READY] ESP32 Ready with EMA Filter & Non-blocking MQTT\n");
 }
 
 /* ============================================================
  *  LOOP
  * ============================================================ */
 void loop() {
-  if (!mqttClient.connected()) connectMQTT();
+  // [OPTIMIZED] Kiểm tra kết nối MQTT không-chặn (Non-blocking)
+  checkMQTTConnection();
   mqttClient.loop();
   updateAlarm();
 
@@ -103,27 +114,31 @@ float readUltrasonicDistance() {
   digitalWrite(TRIG_PIN, LOW);
 
   long duration = pulseIn(ECHO_PIN, HIGH, 25000UL);
-  if (duration == 0) return -1.0;
+  if (duration == 0) return -1.0f;
 
-  float dist = (duration * 0.0343f) / 2.0f;
-  updateDwell(dist);
-  return dist;
+  float rawDist = (duration * 0.0343f) / 2.0f;
+
+  // [OPTIMIZED] Lọc nhiễu khoảng cách bằng EMA
+  emaDistance = applyEMA(rawDist, emaDistance);
+
+  updateDwell(emaDistance);
+  return emaDistance;
 }
 
 void updateDwell(float dist_cm) {
   unsigned long now = millis();
-  if (dist_cm < 15.0 && dist_cm >= 0) {
+  if (dist_cm < 15.0f && dist_cm >= 0) {
     if (!objectPresent) {
       objectPresent      = true;
       objectPresentStart = now;
-      dwellTimeSec       = 0.0;
+      dwellTimeSec       = 0.0f;
     } else {
-      dwellTimeSec = (now - objectPresentStart) / 1000.0;
+      dwellTimeSec = (now - objectPresentStart) / 1000.0f;
     }
   } else {
     if (objectPresent) {
       objectPresent = false;
-      dwellTimeSec  = 0.0;
+      dwellTimeSec  = 0.0f;
     }
   }
 }
@@ -133,8 +148,8 @@ float getDwellTimeSec() { return dwellTimeSec; }
 /* ==================== LOADCELL HX711 ==================== */
 
 float readWeightGrams() {
-  if (!loadcell.is_ready()) return 0.0f;
-  long raw = loadcell.get_units(5);
+  if (!loadcell.is_ready()) return emaWeight; // [OPTIMIZED] Trả về giá trị lọc cũ nếu phần cứng bận
+  long raw = loadcell.get_units(3); // [OPTIMIZED] Giảm mẫu đọc xuống 3 để tránh trễ chu kỳ
   float w = raw / calScale;
 
   // Auto-calibrate: nếu kéo slider max (>5000g), tự tính scale
@@ -145,8 +160,12 @@ float readWeightGrams() {
     w = 5000.0f;
   }
 
-  if (w < 0.5f) w = 0.0f;
-  return w;
+  // [OPTIMIZED] Khử trôi điểm 0 (Zero-drift tolerance)
+  if (w < 1.0f) w = 0.0f;
+
+  // [OPTIMIZED] Lọc nhiễu khối lượng bằng EMA
+  emaWeight = applyEMA(w, emaWeight);
+  return emaWeight;
 }
 
 /* ==================== ACTUATORS ==================== */
@@ -186,22 +205,28 @@ void connectWiFi() {
   Serial.printf("[WiFi] Connecting to %s ...\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   int tries = 0;
-  while (WiFi.status() != WL_CONNECTED && tries < 40) {
+  while (WiFi.status() != WL_CONNECTED && tries < 30) {
     delay(500); Serial.print("."); tries++;
   }
   Serial.println(WiFi.status() == WL_CONNECTED
-    ? "\n[WiFi] Connected" : "\n[WiFi] FAILED");
+    ? "\n[WiFi] Connected" : "\n[WiFi] FAILED — Running offline mode");
 }
 
 /* ==================== MQTT ==================== */
 
-void connectMQTT() {
-  while (!mqttClient.connected()) {
+// [OPTIMIZED] Reconnect MQTT không làm đóng băng chương trình
+void checkMQTTConnection() {
+  if (mqttClient.connected()) return;
+
+  unsigned long now = millis();
+  if (now - lastMqttRetry >= 5000) {
+    lastMqttRetry = now;
+    Serial.print("[MQTT] Connecting to broker...");
     if (mqttClient.connect(CLIENT_ID)) {
-      Serial.println("[MQTT] Connected");
+      Serial.println(" CONNECTED");
       mqttClient.subscribe(TOPIC_ACTUATORS);
     } else {
-      delay(3000);
+      Serial.printf(" FAILED (rc=%d), retry in 5s\n", mqttClient.state());
     }
   }
 }
@@ -241,5 +266,7 @@ void publishSensorData() {
     dist, w, d);
 
   Serial.printf("[MQTT TX] %s\n", json);
-  mqttClient.publish(TOPIC_SENSORS, json);
+  if (mqttClient.connected()) {
+    mqttClient.publish(TOPIC_SENSORS, json);
+  }
 }
