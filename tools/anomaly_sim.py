@@ -31,7 +31,7 @@ while True:
     idx += 1
 
     payload = {
-        "deviceId": f"STATION_{idx:02d}",
+        "deviceId": "STATION_01",
         "distance_cm": a["distance_cm"] + round(random.uniform(-2, 2), 1),
         "weight_g": a["weight_g"] + round(random.uniform(-30, 30), 1),
         "dwell_time_sec": a["dwell"] + round(random.uniform(0, 1), 1),

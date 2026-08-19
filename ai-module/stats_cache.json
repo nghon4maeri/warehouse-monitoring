@@ -1,0 +1,17 @@
+{
+  "weight": {
+    "count": 23,
+    "mean": 514.26,
+    "std": 11.55
+  },
+  "dwell": {
+    "count": 23,
+    "mean": 2.0,
+    "std": 0.0
+  },
+  "distance": {
+    "count": 23,
+    "mean": 12.0,
+    "std": 0.0
+  }
+}
