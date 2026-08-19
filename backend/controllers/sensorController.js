@@ -1,13 +1,3 @@
-/**
- * Sensor Data Controller
- * =======================
- * Phụ trách: Nguyễn Hồ Nam
- *
- * Nhận dữ liệu cảm biến từ MQTT, lưu vào Firebase,
- * gọi AI Service phân loại, phát lệnh actuator và
- * broadcast real-time qua Socket.io đến frontend.
- */
-
 const { saveSensorReading }            = require('../services/firebaseService');
 const { predictCargo }                = require('../services/aiService');
 const { publishActuator }              = require('../services/mqttService');
@@ -55,7 +45,7 @@ async function processAI(sensorPayload) {
 
     if (aiResult.is_anomaly) {
       publishActuator('alarm_on');
-      recordReading(null, true);
+      recordReading(aiResult.category, true);
       await Promise.allSettled([
         sendDiscordAlert(sensorPayload, aiResult),
         sendEmailAlert(sensorPayload, aiResult),

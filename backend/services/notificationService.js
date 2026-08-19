@@ -31,7 +31,7 @@ const shiftStats = {
 function recordReading(category, isAnomaly) {
   shiftStats.totalReadings++;
   if (isAnomaly) shiftStats.anomalyCount++;
-  else if (category && shiftStats.categoryBreakdown[category] !== undefined) {
+  if (category && shiftStats.categoryBreakdown[category] !== undefined) {
     shiftStats.categoryBreakdown[category]++;
   }
 }
