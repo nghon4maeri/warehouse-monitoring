@@ -36,9 +36,12 @@ docker compose up --build
 # Frontend: http://localhost
 # Backend:  http://localhost:4000
 ```
-### 3D Model
-<img src="docs/print3D.png" alt="3D Model" width="500">
----
+<table>
+  <tr>
+    <td align="center"><b>3D Model</b><br><img src="docs/print3D.png" alt="3D Model" width="450"></td>
+    <td align="center"><b>Wokwi Simulation</b><br><img src="docs/wokwi.png" alt="Wokwi" width="600"></td>
+  </tr>
+</table>
 
 ## Advanced Features Setup
 

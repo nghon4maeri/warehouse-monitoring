@@ -218,8 +218,12 @@ export default function Dashboard() {
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium
           bg-red-950/50 border-red-500 text-red-300 animate-pulse">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span className="font-bold">ANOMALY:</span> {anomalyReason}
-          <span className="text-red-500">→ {recommendedAction}</span>
+          <span className="font-bold">Alert:</span> {anomalyReason}
+          <span className="text-red-400 font-semibold">
+            → {recommendedAction === 'INSPECT_STATION'
+              ? 'Please inspect the station'
+              : 'Check the sorting gate'}
+          </span>
         </div>
       )}
 

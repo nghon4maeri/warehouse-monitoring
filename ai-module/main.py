@@ -137,11 +137,11 @@ def detect_anomalies(w: float, d: float, t: float) -> list[str]:
     reasons = []
 
     if d < 0:
-        reasons.append(f"SENSOR FAULT — no echo")
+        reasons.append("Sensor fault: ultrasonic no echo received")
     if w < 0:
-        reasons.append(f"SENSOR FAULT — negative weight ({w:.0f}g)")
+        reasons.append(f"Sensor fault: negative weight reading ({w:.0f}g)")
     if w > HEAVY_MAX:
-        reasons.append(f"OVERLOAD — {w:.0f}g > {HEAVY_MAX}g capacity")
+        reasons.append(f"Overload detected: {w:.0f}g exceeds the {HEAVY_MAX}g capacity")
 
     if stats_weight.n < MIN_SAMPLES or w <= 0 or d < 0:
         return reasons
@@ -149,17 +149,24 @@ def detect_anomalies(w: float, d: float, t: float) -> list[str]:
     if stats_weight.std > 0:
         z = (w - stats_weight.mean) / stats_weight.std
         if abs(z) > ZSCORE_THRESHOLD:
-            reasons.append(f"Weight anomaly: {w:.0f}g (z={z:+.1f}σ, normal ~{stats_weight.mean:.0f}±{stats_weight.std:.0f}g)")
+            reasons.append(
+                f"Unusual weight: {w:.0f}g deviates from the typical {stats_weight.mean:.0f}g "
+                f"(expected range {stats_weight.mean - stats_weight.std:.0f}-{stats_weight.mean + stats_weight.std:.0f}g)"
+            )
 
     if stats_dwell.std > 0 and t > 0:
         z = (t - stats_dwell.mean) / stats_dwell.std
         if abs(z) > ZSCORE_THRESHOLD:
-            reasons.append(f"Dwell anomaly: {t:.1f}s (z={z:+.1f}σ, normal ~{stats_dwell.mean:.1f}±{stats_dwell.std:.1f}s)")
+            reasons.append(
+                f"Unusual dwell time: {t:.1f}s vs typical {stats_dwell.mean:.1f}s"
+            )
 
     if stats_distance.std > 0 and d > 0:
         z = (d - stats_distance.mean) / stats_distance.std
         if abs(z) > ZSCORE_THRESHOLD:
-            reasons.append(f"Distance anomaly: {d:.1f}cm (z={z:+.1f}σ)")
+            reasons.append(
+                f"Unusual distance: {d:.1f}cm vs typical {stats_distance.mean:.1f}cm"
+            )
 
     return reasons
 
