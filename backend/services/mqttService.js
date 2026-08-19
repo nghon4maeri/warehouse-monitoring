@@ -1,12 +1,3 @@
-/**
- * MQTT Broker Service
- * ====================
- * Phụ trách: Đàng Thế Tony
- *
- * Khởi tạo kết nối MQTT đến broker (HiveMQ), subscribe
- * warehouse/sensors và publish lệnh điều khiển lên warehouse/actuators.
- */
-
 const mqtt = require('mqtt');
 
 const MQTT_TOPIC_SENSORS   = 'warehouse/sensors';

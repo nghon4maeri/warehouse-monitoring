@@ -133,6 +133,7 @@ Interactive bot that responds to commands in a Discord channel.
 
 #### Firebase Realtime Database (Cloud Storage)
 — All sensor readings stored in Firebase RTDB as time-series at `sensors/{deviceId}/{timestamp}`. Frontend loads historical data from Firebase on initial page load to populate charts (LineChart + BarChart), then continues with real-time Socket.io updates.
+
 <img src="docs/firebase.png" alt="Firebase" width="600">
 
 #### Recharts Visualization (Dashboard Charts)
@@ -152,7 +153,6 @@ Interactive bot that responds to commands in a Discord channel.
 - **Real-time**: Socket.io for live sensor data and actuator commands
 ##### Web Dashboard
 <img src="docs/web.png" alt="Web Dashboard" width="600">
----
 
 ### AI/DS Microservice
 

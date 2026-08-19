@@ -1,12 +1,3 @@
-/**
- * Firebase Realtime Database Service
- * ====================================
- * Phụ trách: Nguyễn Hồ Nam
- *
- * Lưu trữ dữ liệu cảm biến (time-series) vào Firebase RTDB
- * và truy xuất lịch sử dữ liệu cho frontend.
- */
-
 const { db: firebaseDb } = require('../config/firebase');
 
 function saveSensorReading(payload) {
