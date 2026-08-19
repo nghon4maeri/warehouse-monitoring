@@ -2,7 +2,11 @@
 
 An IoT-based smart warehouse monitoring and automated goods sorting system. PHY00007 Project - Internet of Things
 
+## System Overview
+
 ![Data Flow](docs/pipeline.png)
+
+
 
 ## Quick Start (Local)
 
@@ -32,7 +36,8 @@ docker compose up --build
 # Frontend: http://localhost
 # Backend:  http://localhost:4000
 ```
-
+### 3D Model
+<img src="docs/print3D.png" alt="3D Model" width="500">
 ---
 
 ## Advanced Features Setup
@@ -125,6 +130,7 @@ Interactive bot that responds to commands in a Discord channel.
 
 #### Firebase Realtime Database (Cloud Storage)
 — All sensor readings stored in Firebase RTDB as time-series at `sensors/{deviceId}/{timestamp}`. Frontend loads historical data from Firebase on initial page load to populate charts (LineChart + BarChart), then continues with real-time Socket.io updates.
+<img src="docs/firebase.png" alt="Firebase" width="600">
 
 #### Recharts Visualization (Dashboard Charts)
 — Three Recharts components on Dashboard:
@@ -141,7 +147,8 @@ Interactive bot that responds to commands in a Discord channel.
 - **Frontend**: React + Vite + Tailwind CSS + Recharts
 - **Auth**: JWT middleware protecting API routes
 - **Real-time**: Socket.io for live sensor data and actuator commands
-
+##### Web Dashboard
+<img src="docs/web.png" alt="Web Dashboard" width="600">
 ---
 
 ### AI/DS Microservice
