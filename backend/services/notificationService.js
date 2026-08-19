@@ -1,12 +1,3 @@
-/**
- * Notification Service — Discord Webhook + Nodemailer
- * ====================================================
- * Phụ trách: Đàng Thế Tony
- *
- * - Gửi cảnh báo tức thì qua Discord Webhook và Email (SMTP)
- * - Báo cáo định kỳ cuối ca qua Email (node-cron)
- */
-
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 
@@ -90,8 +81,6 @@ async function sendDiscordAlert(payload, aiResult) {
   }
 }
 
-// ───── Instant Email Alert ─────
-
 async function sendEmailAlert(payload, aiResult) {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.warn('[Email] Not configured — skipping alert');
@@ -119,8 +108,6 @@ async function sendEmailAlert(payload, aiResult) {
     console.error('[Email] Error:', err.message);
   }
 }
-
-// ───── Scheduled shift reports ─────
 
 async function sendShiftReport() {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {

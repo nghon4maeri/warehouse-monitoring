@@ -1,14 +1,8 @@
-// ============================================================
-// Smart Warehouse — ESP32 Firmware (Optimized Version)
-// Nguyễn Hồ Nam / Trần Hoàng Minh Khang / Đàng Thế Tony
-// ============================================================
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <HX711.h>
 
-/* ========== Pin Definitions ========== */
 #define TRIG_PIN    5
 #define ECHO_PIN    18
 #define LC_DOUT     32
@@ -17,44 +11,42 @@
 #define BUZZER_PIN  21
 #define SERVO_CHANNEL 0
 
-/* ========== Servo PWM (50Hz, 16-bit, 0-180°) ========== */
 int angleToDuty(int angle) {
   return map(angle, 0, 180, 3277, 6554);
 }
 
-/* ========== Network & MQTT ========== */
-const char* WIFI_SSID      = "Wokwi-GUEST";
-const char* WIFI_PASSWORD  = "";
-const char* MQTT_BROKER    = "broker.hivemq.com";
-const int   MQTT_PORT      = 1883;
-const char* CLIENT_ID      = "warehouse-esp32-001";
-const char* TOPIC_SENSORS  = "warehouse/sensors";
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* WIFI_PASSWORD = "";
+const char* MQTT_BROKER = "broker.hivemq.com";
+const int   MQTT_PORT = 1883;
+const char* CLIENT_ID = "warehouse-esp32-001";
+const char* TOPIC_SENSORS = "warehouse/sensors";
 const char* TOPIC_ACTUATORS = "warehouse/actuators";
 
-WiFiClient   wifiClient;
+WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-/* ========== Ultrasonic State ========== */
-bool          objectPresent       = false;
-unsigned long objectPresentStart  = 0;
-float         dwellTimeSec        = 0.0;
+// Ultrasonic State
+bool objectPresent = false;
+unsigned long objectPresentStart = 0;
+float dwellTimeSec = 0.0;
 
-/* ========== Loadcell ========== */
+// Loadcell State
 HX711 loadcell;
-float calScale    = 2.381f;  // Wokwi "5kg": raw 0-2100 ↔ 0-5000g (2100*2.381≈5000)
-bool  calibrated  = false;
+float calScale = 2.381f;
+bool calibrated  = false;
 
-/* ========== Buzzer ========== */
+// Buzzer State
 bool alarmActive = false;
 
-/* ========== Timer & Reconnect ========== */
+// Timer State
 unsigned long lastSensorRead = 0;
 const unsigned long SENSOR_INTERVAL = 1000;
 unsigned long lastMqttRetry  = 0;
 
-/* ========== EMA Filter Parameters ========== */
+// EMA Filter Parameters
 float emaDistance = 0.0f;
-float emaWeight   = 0.0f;
+float emaWeight = 0.0f;
 const float EMA_ALPHA = 1.0f;  // 1.0 = đo chính xác giá trị slider (Wokwi); 0.35 cho phần cứng thật (lọc nhiễu)
 
 float applyEMA(float currentVal, float prevFiltered) {
@@ -62,7 +54,7 @@ float applyEMA(float currentVal, float prevFiltered) {
   return (EMA_ALPHA * currentVal) + ((1.0f - EMA_ALPHA) * prevFiltered);
 }
 
-/* ==================== FORWARD DECLARATIONS ==================== */
+// FORWARD DECLARATIONS
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void connectWiFi();
 void checkMQTTConnection();
@@ -74,9 +66,6 @@ float readWeightGrams();
 float getDwellTimeSec();
 void handleCommand(const String& cmd);
 
-/* ============================================================
- *  SETUP
- * ============================================================ */
 void setup() {
   Serial.begin(115200);
 
@@ -103,9 +92,6 @@ void setup() {
   Serial.println("[READY] ESP32 Ready with EMA Filter & Non-blocking MQTT\n");
 }
 
-/* ============================================================
- *  LOOP
- * ============================================================ */
 void loop() {
   checkMQTTConnection();
   mqttClient.loop();
@@ -116,8 +102,6 @@ void loop() {
     publishSensorData();
   }
 }
-
-/* ==================== ULTRASONIC HC-SR04 ==================== */
 
 float readUltrasonicDistance() {
   digitalWrite(TRIG_PIN, LOW);
@@ -140,23 +124,23 @@ void updateDwell(float dist_cm) {
   unsigned long now = millis();
   if (dist_cm < 15.0f && dist_cm >= 0) {
     if (!objectPresent) {
-      objectPresent      = true;
+      objectPresent = true;
       objectPresentStart = now;
-      dwellTimeSec       = 0.0f;
+      dwellTimeSec = 0.0f;
     } else {
       dwellTimeSec = (now - objectPresentStart) / 1000.0f;
     }
   } else {
     if (objectPresent) {
       objectPresent = false;
-      dwellTimeSec  = 0.0f;
+      dwellTimeSec = 0.0f;
     }
   }
 }
 
 float getDwellTimeSec() { return dwellTimeSec; }
 
-/* ==================== LOADCELL HX711 ==================== */
+/* LOADCELL HX711 */
 
 float readWeightGrams() {
   if (!loadcell.is_ready()) return emaWeight;
@@ -179,15 +163,22 @@ float readWeightGrams() {
   return emaWeight;
 }
 
-/* ==================== ACTUATORS ==================== */
+/* ACTUATORS */
 
 void setServoAngle(int angle) {
   ledcWrite(SERVO_CHANNEL, angleToDuty(angle));
   alarmActive = false;
 }
 
-void alarmOn()  { alarmActive = true;  digitalWrite(BUZZER_PIN, HIGH); }
-void alarmOff() { alarmActive = false; digitalWrite(BUZZER_PIN, LOW);  }
+void alarmOn()  { 
+  alarmActive = true;  
+  digitalWrite(BUZZER_PIN, HIGH); 
+}
+
+void alarmOff() { 
+  alarmActive = false; 
+  digitalWrite(BUZZER_PIN, LOW);  
+}
 
 void updateAlarm() {
   if (!alarmActive) return;
@@ -201,16 +192,16 @@ void updateAlarm() {
 }
 
 void handleCommand(const String& cmd) {
-  if      (cmd == "gate_light")  setServoAngle(45);
+  if (cmd == "gate_light") setServoAngle(45);
   else if (cmd == "gate_medium") setServoAngle(90);
-  else if (cmd == "gate_heavy")  setServoAngle(135);
-  else if (cmd == "gate_close")  setServoAngle(0);
-  else if (cmd == "gate_open")   setServoAngle(0);
-  else if (cmd == "alarm_on")    alarmOn();
-  else if (cmd == "alarm_off")   alarmOff();
+  else if (cmd == "gate_heavy") setServoAngle(135);
+  else if (cmd == "gate_close") setServoAngle(0);
+  else if (cmd == "gate_open") setServoAngle(0);
+  else if (cmd == "alarm_on") alarmOn();
+  else if (cmd == "alarm_off") alarmOff();
 }
 
-/* ==================== WiFi ==================== */
+/* WiFi  */
 
 void connectWiFi() {
   Serial.printf("[WiFi] Connecting to %s ...\n", WIFI_SSID);
@@ -223,7 +214,7 @@ void connectWiFi() {
     ? "\n[WiFi] Connected" : "\n[WiFi] FAILED — Running offline mode");
 }
 
-/* ==================== MQTT ==================== */
+/* MQTT  */
 
 void checkMQTTConnection() {
   if (mqttClient.connected()) return;
@@ -261,7 +252,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   handleCommand(cmd);
 }
 
-/* ==================== PUBLISH ==================== */
+/* PUBLISH */
 
 void publishSensorData() {
   float dist = readUltrasonicDistance();
