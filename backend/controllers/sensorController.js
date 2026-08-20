@@ -18,15 +18,19 @@ async function handleSensorData(payload) {
   if (io) io.emit('sensor-data', payload);
 
   const dist = parseFloat(payload.distance_cm);
-  if (!isNaN(dist) && dist < 15.0 && !objectDetected) {
+  const isNewObject = !isNaN(dist) && dist < 15.0 && !objectDetected;
+
+  if (!isNaN(dist) && dist < 15.0) {
     objectDetected = true;
-    await processAI(payload);
   } else if (!isNaN(dist) && dist >= 15.0) {
     objectDetected = false;
   }
+
+  // AI phan loai MOI lan nhan du lieu tu cam bien
+  await processAI(payload, isNewObject);
 }
 
-async function processAI(sensorPayload) {
+async function processAI(sensorPayload, isNewObject = false) {
   try {
     const aiResult = await predictCargo(sensorPayload);
     console.log('[AI] Prediction:', JSON.stringify(aiResult));
@@ -42,6 +46,9 @@ async function processAI(sensorPayload) {
         recommended_action: aiResult.recommended_action,
       });
     }
+
+    // Chi dieu khien actuator + gui canh bao khi co vat moi vao vung do
+    if (!isNewObject) return;
 
     if (aiResult.is_anomaly) {
       publishActuator('alarm_on');

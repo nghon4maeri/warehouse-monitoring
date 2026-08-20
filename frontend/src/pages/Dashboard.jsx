@@ -58,6 +58,7 @@ export default function Dashboard() {
   const [isAnomaly, setIsAnomaly] = useState(false);
   const [anomalyReason, setAnomalyReason] = useState('');
   const [recommendedAction, setRecommendedAction] = useState('');
+  const [detectedWeight, setDetectedWeight] = useState(null);
   const [stats, setStats] = useState({ total: 0, anomalies: 0 });
   const [categoryCounts, setCategoryCounts] = useState({ Light: 0, Medium: 0, Heavy: 0, Anomaly: 0 });
   const [gateOpen, setGateOpen] = useState(false);
@@ -66,6 +67,7 @@ export default function Dashboard() {
 
   const connectedRef = useRef(false);
   const historyLoadedRef = useRef(false);
+  const lastCategoryRef = useRef('');
 
   const classifyWeight = (w) => {
     if (w == null || w <= 0) return 'Anomaly';
@@ -172,11 +174,16 @@ export default function Dashboard() {
       setIsAnomaly(!!payload.is_anomaly);
       setAnomalyReason(payload.anomaly_reason || '');
       setRecommendedAction(payload.recommended_action || '');
-      if (payload.is_anomaly) {
-        setStats((prev) => ({ ...prev, anomalies: prev.anomalies + 1 }));
-        setCategoryCounts((prev) => ({ ...prev, Anomaly: prev.Anomaly + 1 }));
-      } else if (payload.category) {
-        setCategoryCounts((prev) => ({ ...prev, [payload.category]: (prev[payload.category] || 0) + 1 }));
+      setDetectedWeight(payload.weight_g ?? null);
+
+      // Chi dem vao BarChart khi category thay doi (tranh dem lap moi 1s)
+      const key = payload.is_anomaly ? 'Anomaly' : (payload.category || '');
+      if (key && key !== lastCategoryRef.current) {
+        lastCategoryRef.current = key;
+        setCategoryCounts((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
+        if (payload.is_anomaly) {
+          setStats((prev) => ({ ...prev, anomalies: prev.anomalies + 1 }));
+        }
       }
     });
 
@@ -285,6 +292,9 @@ export default function Dashboard() {
             {aiCategory || '--'}
           </span>
           <span className="text-xs text-gray-500 mt-1">AI Classify</span>
+          {detectedWeight != null && (
+            <span className="text-[10px] text-cyan-400 mt-0.5">{detectedWeight} g detected</span>
+          )}
         </div>
         <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 flex flex-col items-center justify-center">
           <span className="text-2xl font-bold text-emerald-400">{stats.total}</span>
